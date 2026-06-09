@@ -1,6 +1,6 @@
 ---
 name: t5t-skill
-description: 用于生成下周 T5T 或修改已有 T5T。适合根据用户提供的周报、会议纪要、项目进展、客户反馈、市场观察等参考材料，提炼不超过 5 条、每条不超过 80 字、可适当包含本周核心重点、按优先级排序的工作重点；生成后询问是否写入系统，写入时通过 im-teams-auth 获取 360Teams 公网 IM token，再按 Editor 页面接口字段提交；缺少参考材料时先建议用户补充数据来源，不编造内容。
+description: 生成或修改 T5T（Top 5 Things 工作重点）。根据周报、会议纪要、项目进展、客户反馈等材料，提炼不超过 5 条、每条 80 字内、按优先级排序的重点，确认后写入 360Teams。用户要写下周 T5T、修改已有 T5T、或把材料整理成 T5T 时使用。
 ---
 
 # T5T Skill
@@ -18,6 +18,14 @@ T5T 默认指 Top 5 Things。除非用户给出内部固定格式，否则按“
 - `scripts/submit_t5t.py`：查询可填写周期并新建 T5T。
 - `scripts/edit_t5t.py`：查询最新已填写 T5T 并提交修改。
 - `scripts/t5t_client.py`：复用认证、请求、数据解析、payload 和确认哈希能力；不要直接作为命令执行。
+
+运行前置：脚本需要 Python 3.9+。**每次任务开始时探测一次可用解释器，整个任务复用，不必每条命令重复探测**，依次尝试：
+
+```bash
+python3 --version || python --version || py -3 --version
+```
+
+用第一个成功且版本 ≥ 3.9 的命令（`python3` / `python` / `py -3`）作为本次任务所有脚本的解释器（下文示例统一写 `python3`，按探测结果替换即可；脚本内部调用 `im-teams-auth` 会继承同一解释器，无需重复探测）。三者都失败、或报 `command not found`/`不是内部或外部命令`、或 macOS 弹「安装命令行开发者工具」、Windows 跳应用商店时，再提示用户：「需要安装 Python 3.9+（https://www.python.org/downloads/），或确认 Python 已加入 PATH，然后重试」，不要直接断言没装，也不要反复重试同一命令。
 
 强约束：
 
@@ -262,10 +270,9 @@ python3 scripts/edit_t5t.py --skip-confirmation --id '<详情 id>' --confirmatio
 - `canOperate` 为 `false` 时禁止生成编辑 payload 或提交。
 - 编辑时只能删除详情 `toList` 中已有的抄送人，禁止新增、重复、替换或修改抄送人对象。
 - 同组可见（`inviteSameGroupView`）默认 `true`；用户明确要求时才改为 `false`。新建和编辑的两次调用必须使用相同的同组可见值。
-- 禁止调用旧的 `teams-auth`。
 - 禁止展示请求头中的 `Authorization` 或完整 token。
 - `Appkey` 固定为 `t5t`；`Authorization` 使用 `im-teams-auth` 对应环境的原始 token，不添加 `Bearer`。
-- 脚本负责生成 Editor 页面要求的固定字段和 5 项 `rawContent`，不足 5 项自动补空字符串；输入超过 5 条时拒绝执行。
+- 脚本负责生成提交接口要求的固定字段和 5 项 `rawContent`，不足 5 项自动补空字符串；输入超过 5 条时拒绝执行。
 - 脚本按 `t5t-skill/scripts/config.py` 中的配置执行；临时覆盖仅属于开发调试能力，不属于面向最终用户的话术。
 
 ## 用户提示约束

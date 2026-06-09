@@ -1,11 +1,6 @@
 ---
 name: im-teams-auth
-description: >
-  通过 360Teams 客户端打开项目域名认证页，从 Teams 已登录态获取短期认证凭证，由本地脚本兑换公网 IM token 并写入 OS Keyring。
-  适用于认证必须发生在项目域名下、项目页面需要把短期认证凭证安全回传给本地脚本的场景。
-  skill 会启动一次性本地 receiver，等待 max-oplatform 落地页回传短期认证凭证，兑换 token 后缓存 3 天，
-  支持 macOS Keychain 与 Windows Credential Manager；当其他 IM/Teams 技能返回退出码 4
-  或用户要求重新认证时使用；支持清除单个或所有环境的 token。
+description: 获取并缓存 360Teams 公网 IM token。通过 Teams 客户端完成认证，兑换 token 写入 OS Keyring（macOS/Windows），支持检查、重新认证与清除。业务 skill 需要 360Teams IM token、收到认证失效（退出码 4）、或用户要求重新认证/退出登录时使用。
 ---
 
 # IM Teams Auth
@@ -35,6 +30,14 @@ description: >
 - macOS Keychain
 - Windows Credential Manager
 - 自动安装 `keyring`（若缺失），其余仅依赖 Python 标准库
+
+运行前置：脚本需要 Python 3.9+。**被直接调用时，每次任务开始探测一次可用解释器并复用**（若由 `t5t-skill` 等业务 skill 调起，业务 skill 已在任务开始探测、且脚本经 `sys.executable` 继承同一解释器，这里无需重复探测），依次尝试：
+
+```bash
+python3 --version || python --version || py -3 --version
+```
+
+用第一个成功且版本 ≥ 3.9 的命令（`python3` / `python` / `py -3`）作为本次任务所有脚本的解释器（文档示例统一写 `python3`，按探测结果替换即可）。三者都失败、或报 `command not found`/`不是内部或外部命令`、或 macOS 弹「安装命令行开发者工具」、Windows 跳应用商店时，再提示用户：「需要安装 Python 3.9+（https://www.python.org/downloads/），或确认 Python 已加入 PATH，然后重试」，不要直接断言没装，也不要反复重试同一命令。
 
 ## 原理
 
@@ -86,28 +89,16 @@ python3 scripts/auth.py --clear --env production
 python3 scripts/auth.py --clear-all
 ```
 
-自定义落地页：
+macOS/Linux 也可以用包装脚本：
 
 ```bash
-python3 scripts/auth.py --landing-url https://im.360teams.com/discover/imTeamsAuth
-```
-
-本地调试落地页：
-
-```bash
-python3 scripts/auth.py --env test --landing-url http://localhost:8001/discover/imTeamsAuth
-```
-
-macOS 也可以直接用包装脚本：
-
-```bash
-./scripts/run.sh auth --env test --landing-url http://localhost:8001/discover/imTeamsAuth
+./scripts/run.sh auth
 ```
 
 Windows 可以用：
 
 ```bat
-scripts\\run.bat auth --env test --landing-url http://localhost:8001/discover/imTeamsAuth
+scripts\run.bat auth
 ```
 
 脚本默认不会直接打开落地页，而是打开 Teams scheme：

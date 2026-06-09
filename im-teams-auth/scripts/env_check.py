@@ -323,28 +323,10 @@ def _discover_linux() -> Optional[Tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Installation guidance
+# Not-found message
 # ---------------------------------------------------------------------------
 
-_INSTALL_GUIDES = {
-    "Windows": (
-        "请安装 Python 3.9+：https://www.python.org/downloads/ "
-        "安装时务必勾选 'Add Python to PATH' 和 'Install py launcher'。"
-    ),
-    "macOS": (
-        "Homebrew: brew install python@3.9 "
-        "或官方安装包: https://www.python.org/downloads/"
-    ),
-    "Linux": (
-        "Ubuntu/Debian: sudo apt install python3.9 "
-        "或 CentOS/RHEL: sudo yum install python3.9"
-    ),
-}
-
-
-def _install_guide(plat: str) -> str:
-    """Return platform-specific installation guidance."""
-    return _INSTALL_GUIDES.get(plat, _INSTALL_GUIDES["Linux"])
+PYTHON_NOT_FOUND_MESSAGE = "未找到 Python 3.9+，请安装 Python 3.9 及以上版本后重试。"
 
 
 # ---------------------------------------------------------------------------
@@ -390,8 +372,8 @@ def find_python() -> str:
             _write_cache(real_path)
             return real_path
 
-    # Priority 4: not found - raise with guidance
-    raise EnvironmentError(_install_guide(plat))
+    # Priority 4: not found
+    raise EnvironmentError(PYTHON_NOT_FOUND_MESSAGE)
 
 
 def find_python_with_info() -> dict:
@@ -469,7 +451,7 @@ def find_python_with_info() -> dict:
     # Priority 4: not found
     return {
         "status": "error",
-        "message": _install_guide(plat),
+        "message": PYTHON_NOT_FOUND_MESSAGE,
         "platform": plat,
     }
 
