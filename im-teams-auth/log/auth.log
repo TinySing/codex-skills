@@ -1,0 +1,15 @@
+2026-06-08 18:55:25,192 [INFO] __main__ main:279: Landing page opened=True port=35101
+2026-06-08 18:56:54,511 [INFO] __main__ main:279: Landing page opened=True port=35101
+2026-06-08 19:03:31,460 [INFO] __main__ main:279: Landing page opened=True port=35101
+2026-06-08 19:45:16,459 [INFO] auth_flow_test main:284: Landing page opened=True port=35110
+2026-06-08 19:48:29,834 [INFO] auth_final_test main:284: Landing page opened=True port=35110
+2026-06-08 20:06:07,079 [INFO] __main__ main:289: Landing page opened=True port=35101
+2026-06-09 11:36:46,625 [INFO] __main__ main:337: Landing page opened=True port=35101
+2026-06-09 11:49:12,936 [INFO] __main__ main:337: Landing page opened=True port=35101
+2026-06-09 11:57:47,168 [INFO] __main__ main:352: Landing page opened=True port=35101
+2026-06-09 12:03:39,672 [INFO] __main__ main:352: Landing page opened=True port=35101
+2026-06-09 14:04:19,057 [INFO] __main__ main:352: Landing page opened=True port=35101
+2026-06-09 14:13:54,968 [INFO] __main__ main:352: Landing page opened=True port=35101
+2026-06-09 14:19:34,243 [INFO] __main__ main:347: Landing page opened=True port=35101
+2026-06-09 14:30:14,761 [INFO] __main__ main:352: Landing page opened=True port=35101
+2026-06-09 14:37:05,470 [INFO] __main__ main:351: Landing page opened=True port=35101

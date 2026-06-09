@@ -1,0 +1,4 @@
+interface:
+  display_name: "UI Skill"
+  short_description: "把 PRD 拆成 UI 蓝图、风格选择、设计 token、low-fi 和前端 handoff"
+  default_prompt: "使用 $ui-skill 读取我的 PRD 并输出结果。"

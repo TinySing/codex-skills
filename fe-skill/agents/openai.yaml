@@ -1,0 +1,4 @@
+interface:
+  display_name: "FE Skill"
+  short_description: "专家级前端工程师角色支持页面组件、状态、主题变量、实现与评审"
+  default_prompt: "使用 $fe-skill 处理我的前端页面组件逻辑或代码问题。"

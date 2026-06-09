@@ -1,0 +1,4 @@
+interface:
+  display_name: "QA Skill"
+  short_description: "专家级测试工程师角色，支持多文档评审、测试方案、放行结论与测试实现"
+  default_prompt: "使用 $qa-skill 审查我的需求、方案、接口或测试文档，并给出质量结论或放行建议。"

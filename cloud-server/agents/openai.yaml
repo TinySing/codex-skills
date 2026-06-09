@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cloud Server"
+  short_description: "Connect to your cloud server via SSH with saved credentials"
+  default_prompt: "Use cloud-server to connect to 119.29.152.130. First ask me to choose ubuntu or root, then provide the exact login command."

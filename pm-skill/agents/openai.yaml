@@ -1,0 +1,4 @@
+interface:
+  display_name: "PM Skill"
+  short_description: "梳理、评审、优化需求并产出可交付 PRD"
+  default_prompt: "使用 $pm-skill 梳理需求、收敛产品边界，并在信息充分时产出可交付 prd.md。"

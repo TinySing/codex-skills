@@ -1,0 +1,5 @@
+# IM Teams Auth skill 的界面展示信息和默认提示词。
+interface:
+  display_name: "IM Teams Auth"
+  short_description: "通过 Teams 项目认证页获取公网 IM token 并写入系统钥匙串"
+  default_prompt: "使用 $im-teams-auth 检查或获取 360Teams 公网 IM token，并缓存到系统钥匙串。"

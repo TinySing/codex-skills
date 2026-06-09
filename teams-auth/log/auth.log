@@ -1,0 +1,17 @@
+2026-06-08 12:06:26 [INFO] __main__ main:493: AUTH_EXPIRED: 无有效凭证
+2026-06-08 12:06:32 [INFO] __main__ browser_login:413: Authenticating via browser SSO callback...
+2026-06-08 12:06:32 [INFO] __main__ _open_browser:280: Browser opened via webbrowser.open()
+2026-06-08 12:06:32 [INFO] __main__ _wait_for_ticket:371: Starting SSO callback server, port: 35010
+2026-06-08 12:06:38 [ERROR] __main__ main:510: 认证失败: Token exchange request failed with HTTP 405
+2026-06-08 12:06:52 [INFO] __main__ main:493: AUTH_EXPIRED: 无有效凭证
+2026-06-08 12:07:02 [INFO] __main__ browser_login:413: Authenticating via browser SSO callback...
+2026-06-08 12:07:02 [INFO] __main__ _open_browser:280: Browser opened via webbrowser.open()
+2026-06-08 12:07:02 [INFO] __main__ _wait_for_ticket:371: Starting SSO callback server, port: 35002
+2026-06-08 12:39:38 [ERROR] __main__ main:510: 认证失败: 等待 SSO 回调超时（120 秒），请重试
+2026-06-08 12:39:45 [INFO] __main__ main:493: AUTH_EXPIRED: 无有效凭证
+2026-06-08 12:40:35 [INFO] __main__ main:493: AUTH_EXPIRED: 无有效凭证
+2026-06-08 12:40:42 [INFO] __main__ browser_login:413: Authenticating via browser SSO callback...
+2026-06-08 12:40:42 [INFO] __main__ _open_browser:280: Browser opened via webbrowser.open()
+2026-06-08 12:40:42 [INFO] __main__ _wait_for_ticket:371: Starting SSO callback server, port: 35008
+2026-06-08 13:02:32 [ERROR] __main__ main:510: 认证失败: 等待 SSO 回调超时（120 秒），请重试
+2026-06-08 13:02:44 [INFO] __main__ main:493: AUTH_EXPIRED: 无有效凭证

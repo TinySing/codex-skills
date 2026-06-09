@@ -1,0 +1,162 @@
+# IM Teams Auth 架构与执行逻辑
+
+> 本文档面向维护者，描述 `im-teams-auth` 的组件职责、认证流程、调用契约和安全边界。
+> 面向最终用户时，不应展示环境名、token、Keyring 位置或内部配置。
+
+配套文档：
+
+- [CAPABILITIES.md](./CAPABILITIES.md)：面向使用者和调用方的简明能力清单。
+- 本文档：面向维护者的实现流程和安全设计。
+
+## 一、目标与边界
+
+`im-teams-auth` 是业务 skill 共用的认证能力。它负责检查认证状态、拉起 Teams 认证、接收短期认证凭证、兑换公网 IM token、安全缓存凭证，并以稳定状态返回给调用方。
+
+它不负责：
+
+- 处理任何具体业务请求。
+- 决定业务流程在认证后执行什么动作。
+- 在认证页或本地 receiver 之间传输长期 token。
+- 让业务 skill 自行定义认证条件、兜底链接或提示规则。
+
+## 二、组件职责
+
+| 文件 | 职责 |
+|------|------|
+| `scripts/auth.py` | 认证状态检查、认证拉起、本地 receiver、短期凭证兑换和结果输出 |
+| `scripts/credential_store.py` | token 命名、Keyring 读写、过期判断和清理 |
+| `scripts/runtime.py` | 日志初始化和 `keyring` 依赖检测、安装 |
+| `scripts/env_check.py` | Python、平台和 `keyring` 环境检测 |
+| `scripts/config.py` | URL、scheme、端口、超时、Keyring 名称等静态配置 |
+| `scripts/run.sh` | macOS/Linux 命令包装 |
+| `scripts/run.bat` | Windows 命令包装 |
+
+## 三、能力入口
+
+| 动作 | 入口 | 结果 |
+|------|------|------|
+| 环境检测 | `python3 scripts/env_check.py` | 输出 Python、平台和 `keyring` 检测结果 |
+| 检查认证 | `python3 scripts/auth.py --check` | 有有效凭证返回成功，否则返回未认证 |
+| 登录认证 | `python3 scripts/auth.py` | 复用缓存或拉起认证 |
+| 强制认证 | `python3 scripts/auth.py --no-cache` | 清除当前 Keyring 缓存并重新认证 |
+| 清除当前凭证 | `python3 scripts/auth.py --clear` | 清除当前 Keyring token 和过期时间 |
+| 清除全部凭证 | `python3 scripts/auth.py --clear-all` | 清除全部已配置环境的 Keyring 凭证 |
+
+`--landing-url`、`--open-url-directly`、`--port`、`--timeout` 和 `--verbose` 属于开发调试能力，不应作为业务 skill 的常规调用方式。
+
+## 四、认证流程
+
+```mermaid
+sequenceDiagram
+  participant Caller as 业务 Skill
+  participant Auth as auth.py
+  participant Receiver as 本地 Receiver
+  participant Teams as Teams 认证页
+  participant Exchange as Token 兑换接口
+  participant Keyring as OS Keyring
+
+  Caller->>Auth: 检查或获取认证
+  Auth->>Keyring: 读取有效缓存
+  alt 缓存有效
+    Keyring-->>Auth: token 存在
+    Auth-->>Caller: status=ok
+  else 未认证或强制重登
+    Auth->>Receiver: 监听 127.0.0.1
+    Auth->>Teams: 通过 Teams scheme 打开认证页
+    Teams->>Receiver: POST state + 短期认证凭证
+    Receiver->>Receiver: 校验路径、Origin、state、请求格式
+    Receiver->>Exchange: HTTPS 兑换短期凭证
+    Exchange-->>Receiver: 公网 IM token
+    Receiver->>Keyring: 保存 token 和过期时间
+    Auth-->>Caller: status=ok
+  end
+```
+
+关键原则：
+
+- 浏览器页面不能直接写 OS Keyring，因此由本地脚本完成长期 token 兑换和存储。
+- 页面只回传短期认证凭证，长期 token 不经过页面到 receiver 的链路。
+- receiver 是一次性的，成功、失败或超时后退出。
+
+## 五、本地 Receiver 契约
+
+| 项目 | 约束 |
+|------|------|
+| 监听地址 | 仅 `127.0.0.1` |
+| 端口 | 仅 `35101-35110` |
+| 路径 | 仅 `/token` |
+| Method | `POST`，并支持 CORS 预检 `OPTIONS` |
+| Content-Type | `application/json` |
+| 请求体上限 | 16 KiB |
+| Origin | 必须与认证落地页 Origin 一致 |
+| state | 必须与本次认证生成的一次性随机值一致 |
+
+认证页 POST 数据：
+
+```json
+{
+  "state": "一次性 state",
+  "encrypt": "短期认证凭证",
+  "expiresAt": "可选 ISO 时间"
+}
+```
+
+## 六、凭证读取与存储
+
+凭证读取优先级：
+
+1. 对应环境的 token 环境变量。
+2. 对应环境的 OS Keyring 凭证。
+
+Keyring 同时存储 token 和过期时间。没有有效过期时间、已过期或读取失败时，凭证视为不可用。默认缓存有效期为 3 天；认证结果提供有效时间时，使用有效的认证结果时间。
+
+清理操作只处理 Keyring。若调用进程设置了环境变量 token，脚本会返回警告，但不会修改外部环境变量。
+
+## 七、调用方契约
+
+认证结果使用 JSON 状态和退出码表达：
+
+| 退出码 | 含义 | 调用方处理 |
+|--------|------|------------|
+| `0` | 成功 | 继续原业务流程 |
+| `1` | 认证或运行失败 | 展示错误并中断当前业务动作 |
+| `4` | 未认证、认证过期或等待认证超时 | 按认证结果和提示决定是否等待用户操作 |
+
+调用方必须遵守：
+
+- 只消费认证结果，不复制或改写认证策略。
+- 不展示完整 token、请求头或 Keyring 内部信息。
+- 收到浏览器兜底链接时及时展示给用户。
+- 浏览器兜底链接默认是并行提示；只有认证命令已经结束并明确要求中断时，才暂停业务流程。
+- 认证成功后重试或继续原业务动作。
+
+## 八、安全设计
+
+- receiver 只监听回环地址，避免对局域网或公网暴露。
+- 固定端口范围和路径，限制攻击面。
+- 使用一次性随机 `state` 防止伪造回传。
+- 使用严格 `Origin` 校验限制允许的认证页来源。
+- 只接受 JSON，并限制请求体大小。
+- 短期认证凭证通过 HTTPS 兑换。
+- 长期 token 仅保存在环境变量或 OS Keyring，不写明文文件。
+- 日志不记录 token。
+- receiver 超时自动退出。
+
+## 九、状态速查
+
+| status | 含义 |
+|--------|------|
+| `ok` | 已认证、认证成功或清理成功 |
+| `expired` | 未认证、认证过期或等待认证超时 |
+| `error` | 环境、Keyring、receiver、兑换或其他运行错误 |
+
+## 十、维护检查
+
+修改认证能力后至少检查：
+
+- 文档中的命令参数与 `auth.py --help` 一致。
+- receiver 仍只监听回环地址、受限端口和固定路径。
+- `Origin`、`state`、请求格式和请求体大小校验未被绕过。
+- token 未出现在页面回传、日志或明文文件中。
+- 退出码 `0`、`1`、`4` 的含义保持稳定。
+- 调用方仍可区分成功、失败和未认证状态。

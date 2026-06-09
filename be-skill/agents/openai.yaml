@@ -1,0 +1,4 @@
+interface:
+  display_name: "BE Skill"
+  short_description: "专家级后端工程师角色支持接口契约、数据模型、实现、评审与验证"
+  default_prompt: "使用 $be-skill 处理我的后端接口服务数据或代码问题。"

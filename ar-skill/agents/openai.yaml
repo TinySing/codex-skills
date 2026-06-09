@@ -1,0 +1,4 @@
+interface:
+  display_name: "AR Skill"
+  short_description: "专家级架构师角色支持系统设计、评审、开发就绪判断和演进"
+  default_prompt: "使用 $ar-skill 处理我的架构设计或技术决策问题。"
