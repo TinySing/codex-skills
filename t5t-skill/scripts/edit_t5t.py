@@ -37,6 +37,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true", help="查询并输出待提交信息")
     parser.add_argument("--skip-confirmation", action="store_true", help="提交已确认修改")
+    parser.add_argument(
+        "--commit-confirmed",
+        action="store_true",
+        help="用户已确认后，在一次调用中核对并提交修改",
+    )
     parser.add_argument("--confirmation-hash", help="编辑查询阶段返回的 confirmationHash")
     parser.add_argument(
         "--open-preview",
@@ -84,16 +89,20 @@ def print_latest_detail(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        if args.dry_run and args.skip_confirmation:
-            raise t5t.T5TError("--dry-run 和 --skip-confirmation 不能同时使用")
-        if (
-            not args.query_latest
-            and not args.list_recent
-            and not args.dry_run
-            and not args.skip_confirmation
-        ):
+        selected_modes = sum(
+            bool(mode)
+            for mode in (
+                args.query_latest,
+                args.list_recent,
+                args.dry_run,
+                args.skip_confirmation,
+                args.commit_confirmed,
+            )
+        )
+        if selected_modes != 1:
             raise t5t.T5TError(
-                "必须使用 --query-latest、--list-recent、--dry-run 或 --skip-confirmation"
+                "必须且只能使用 --query-latest、--list-recent、--dry-run、"
+                "--skip-confirmation 或 --commit-confirmed 之一"
             )
         if not args.query_latest and not args.list_recent and not args.id:
             raise t5t.T5TError("编辑时必须提供 --id")
@@ -169,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
-        if args.confirmation_hash != confirmation_hash:
+        if args.skip_confirmation and args.confirmation_hash != confirmation_hash:
             raise t5t.T5TError("已确认信息发生变化，请重新查询并确认")
         commit_response = t5t.commit_payload(base_url, headers, payload, args.timeout)
         t5t.print_success(
@@ -185,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
             payload["toList"],
             {**responses, "commit": commit_response},
             payload["inviteSameGroupView"],
+            concise=args.commit_confirmed,
         )
         return 0
     except (t5t.T5TError, json.JSONDecodeError) as error:

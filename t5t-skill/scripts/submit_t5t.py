@@ -18,6 +18,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--check", action="store_true", help="只查询是否存在可填写周期")
     parser.add_argument("--dry-run", action="store_true", help="查询并输出待提交信息")
     parser.add_argument("--skip-confirmation", action="store_true", help="提交已确认内容")
+    parser.add_argument(
+        "--commit-confirmed",
+        action="store_true",
+        help="用户已确认后，在一次调用中核对并提交",
+    )
     parser.add_argument("--report-id", help="提交时指定已确认的周期 reportId")
     parser.add_argument("--confirmation-hash", help="查询阶段返回的 confirmationHash")
     parser.add_argument(
@@ -34,23 +39,58 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def print_already_submitted(environment: str) -> None:
-    t5t.json_print(
-        {
-            "status": "already_submitted",
-            "message": "最新周期已经填写，目前不可新建",
-            "environment": environment,
-        }
-    )
+def print_already_submitted(
+    environment: str,
+    latest_response: dict[str, Any] | None = None,
+    detail_response: dict[str, Any] | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    result: dict[str, Any] = {
+        "status": "already_submitted",
+        "message": "最新周期已经填写，目前不可新建",
+        "environment": environment,
+    }
+    if latest_response is not None and detail_response is not None and detail is not None:
+        to_list = detail.get("toList") or []
+        if not isinstance(to_list, list):
+            raise t5t.T5TError("详情中的权限格式异常")
+        result.update(
+            {
+                "period": {
+                    "reportId": detail.get("reportId"),
+                    "name": detail.get("reportName") or detail.get("title"),
+                },
+                "id": detail.get("id"),
+                "items": t5t.parse_raw_content(detail.get("rawContent")),
+                "toList": to_list,
+                "permissions": t5t.format_copies_info(to_list),
+                "inviteSameGroupView": bool(detail.get("inviteSameGroupView", True)),
+                "sameGroupVisible": t5t.format_same_group(
+                    detail.get("inviteSameGroupView", True)
+                ),
+                "canOperate": bool(detail.get("canOperate")),
+            }
+        )
+    t5t.json_print(result)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        if args.dry_run and args.skip_confirmation:
-            raise t5t.T5TError("--dry-run 和 --skip-confirmation 不能同时使用")
-        if not args.check and not args.dry_run and not args.skip_confirmation:
-            raise t5t.T5TError("必须使用 --check、--dry-run 或 --skip-confirmation")
+        selected_modes = sum(
+            bool(mode)
+            for mode in (
+                args.check,
+                args.dry_run,
+                args.skip_confirmation,
+                args.commit_confirmed,
+            )
+        )
+        if selected_modes != 1:
+            raise t5t.T5TError(
+                "必须且只能使用 --check、--dry-run、--skip-confirmation "
+                "或 --commit-confirmed 之一"
+            )
         if args.skip_confirmation and (not args.report_id or not args.confirmation_hash):
             raise t5t.T5TError(
                 "--skip-confirmation 提交时必须提供 --report-id 和 --confirmation-hash"
@@ -59,7 +99,20 @@ def main(argv: list[str] | None = None) -> int:
         base_url, headers = t5t.create_request_context(args)
         period_response, periods = t5t.query_periods(base_url, headers, args.timeout)
         if not periods:
-            print_already_submitted(args.env)
+            if args.commit_confirmed:
+                latest_response, detail_response, detail = t5t.query_latest_detail(
+                    base_url,
+                    headers,
+                    args.timeout,
+                )
+                print_already_submitted(
+                    args.env,
+                    latest_response,
+                    detail_response,
+                    detail,
+                )
+            else:
+                print_already_submitted(args.env)
             return 0
 
         selected_period = t5t.select_period(periods, args.report_id)
@@ -106,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
-        if args.confirmation_hash != confirmation_hash:
+        if args.skip_confirmation and args.confirmation_hash != confirmation_hash:
             raise t5t.T5TError("已确认信息发生变化，请重新查询并确认")
         commit_response = t5t.commit_payload(base_url, headers, payload, args.timeout)
         t5t.print_success(
@@ -122,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             copies,
             {**responses, "commit": commit_response},
             payload["inviteSameGroupView"],
+            concise=args.commit_confirmed,
         )
         return 0
     except (t5t.T5TError, json.JSONDecodeError) as error:

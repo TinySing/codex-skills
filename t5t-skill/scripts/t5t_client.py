@@ -42,6 +42,8 @@ from config import (
     SELF_WEEKLY_PATH,
 )
 
+_SSL_CONTEXT = ssl.create_default_context()
+
 
 class T5TError(Exception):
     pass
@@ -229,7 +231,7 @@ def request_json(
     try:
         with urlopen(
             request,
-            context=ssl.create_default_context(),
+            context=_SSL_CONTEXT,
             timeout=timeout,
         ) as response:
             raw = response.read().decode("utf-8")
@@ -659,8 +661,27 @@ def print_success(
     copies: list[Any],
     responses: dict[str, Any],
     same_group_visible: bool = True,
+    concise: bool = False,
 ) -> None:
     preview_url = build_preview_url(environment)
+    result: dict[str, Any] = {
+        "status": "ok",
+        "message": "T5T 提交成功",
+        "previewUrl": preview_url,
+        "previewLink": f"[点击预览 T5T]({preview_url})",
+        "previewOpened": False,
+        "period": period,
+        "mode": mode,
+        "items": items,
+        "toList": copies,
+        "permissions": format_copies_info(copies),
+        "inviteSameGroupView": same_group_visible,
+        "sameGroupVisible": format_same_group(same_group_visible),
+    }
+    if concise:
+        json_print(result)
+        return
+
     print("\n" + "=" * 60)
     print("T5T 提交成功")
     print("=" * 60)
@@ -674,18 +695,10 @@ def print_success(
     print("=" * 60)
     json_print(
         {
-            "status": "ok",
-            "message": "T5T 提交成功",
+            **result,
             "environment": environment,
             "baseUrl": base_url,
             "confirmationHash": confirmation_hash,
-            "previewUrl": preview_url,
-            "previewLink": f"[点击预览 T5T]({preview_url})",
-            "previewOpened": False,
-            "period": period,
-            "mode": mode,
-            "items": items,
-            "inviteSameGroupView": same_group_visible,
             "responses": responses,
         }
     )
