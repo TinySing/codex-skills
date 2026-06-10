@@ -11,6 +11,7 @@
 | 拉起 Teams 认证 | 通过 Teams scheme 打开项目域名认证页 | 认证页必须从 Teams 已登录态生成短期凭证 |
 | 浏览器兜底 | 在特定场景输出可点击的认证页链接 | 链接是并行兜底，不代表流程必然暂停 |
 | 本地凭证接收 | 启动一次性回环 HTTP receiver 接收短期认证凭证 | 只监听 `127.0.0.1`，固定端口范围和路径 |
+| 会话复用 | 同一待完成认证期间复用同一个 landing URL 和 receiver | 仅当旧会话过期或 receiver 失活时才新建会话 |
 | Token 兑换 | 通过 HTTPS 将短期认证凭证兑换为公网 IM token | 长期 token 不经过认证页回传给 receiver |
 | 安全存储 | 将 token 和过期时间写入 OS Keyring | 不写入明文文件或日志 |
 | 缓存复用 | 有有效缓存时直接复用，默认缓存 3 天 | 环境变量优先于 Keyring |
@@ -30,7 +31,7 @@
 
 1. 检查已有认证状态。
 2. 未认证时启动一次性本地 receiver。
-3. 生成带 `state` 和 `receiver` 的项目认证页 URL。
+3. 生成带 `state`、`receiver`、`request_expires_at`、`session_id` 和 `win_id` 的项目认证页 URL。
 4. 通过 Teams scheme 打开认证页，并按规则提供浏览器兜底链接。
 5. 认证页回传短期认证凭证。
 6. receiver 校验请求并通过 HTTPS 兑换 token。
@@ -43,6 +44,7 @@
 - receiver 仅接受固定路径和受限端口范围。
 - 校验认证请求的 `Origin`。
 - 校验一次性随机 `state`。
+- 校验与等待超时一致的认证会话时效。
 - 限制请求体大小和 `Content-Type`。
 - 只接收短期认证凭证，不接收长期 token。
 - token 不写入日志或明文文件。

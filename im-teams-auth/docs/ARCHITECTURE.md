@@ -23,8 +23,9 @@
 
 | 文件 | 职责 |
 |------|------|
-| `scripts/auth.py` | 认证状态检查、认证拉起、本地 receiver、短期凭证兑换和结果输出 |
+| `scripts/auth.py` | 认证状态检查、认证拉起、本地 receiver、短期凭证兑换、会话编排和结果输出 |
 | `scripts/credential_store.py` | token 命名、Keyring 读写、过期判断和清理 |
+| `scripts/session_store.py` | 待完成认证会话的文件锁、读写、复用判定与时效计算 |
 | `scripts/runtime.py` | 日志初始化和 `keyring` 依赖检测、安装 |
 | `scripts/env_check.py` | Python、平台和 `keyring` 环境检测 |
 | `scripts/config.py` | URL、scheme、端口、超时、Keyring 名称等静态配置 |
@@ -61,10 +62,15 @@ sequenceDiagram
     Keyring-->>Auth: token 存在
     Auth-->>Caller: status=ok
   else 未认证或强制重登
-    Auth->>Receiver: 监听 127.0.0.1
-    Auth->>Teams: 通过 Teams scheme 打开认证页
+    Auth->>Auth: 检查当前环境是否已有待完成认证会话
+    alt 已有待完成认证会话
+      Auth-->>Caller: 复用已有 landing URL 并等待同一会话结果
+    else 无可复用会话
+      Auth->>Receiver: 监听 127.0.0.1
+      Auth->>Teams: 通过 Teams scheme 打开认证页
+    end
     Teams->>Receiver: POST state + 短期认证凭证
-    Receiver->>Receiver: 校验路径、Origin、state、请求格式
+    Receiver->>Receiver: 校验路径、Origin、state、会话时效、请求格式
     Receiver->>Exchange: HTTPS 兑换短期凭证
     Exchange-->>Receiver: 公网 IM token
     Receiver->>Keyring: 保存 token 和过期时间
@@ -77,6 +83,8 @@ sequenceDiagram
 - 浏览器页面不能直接写 OS Keyring，因此由本地脚本完成长期 token 兑换和存储。
 - 页面只回传短期认证凭证，长期 token 不经过页面到 receiver 的链路。
 - receiver 是一次性的，成功、失败或超时后退出。
+- 认证页 URL 会带 `request_expires_at`，其值与本地等待超时一致，用于约束本次认证会话的有效期。
+- 同一环境同一时刻只允许存在一个待完成认证会话；未超时前必须复用原有链接和 receiver。
 
 ## 五、本地 Receiver 契约
 
@@ -90,14 +98,15 @@ sequenceDiagram
 | 请求体上限 | 16 KiB |
 | Origin | 必须与认证落地页 Origin 一致 |
 | state | 必须与本次认证生成的一次性随机值一致 |
+| 会话时效 | 不得晚于 URL 中的 `request_expires_at` |
+| 窗口 ID | `win_id` 固定等于 `session_id` |
 
-认证页 POST 数据：
+认证页 POST 数据（只回传 `state` 和 `encrypt`；token 过期时间由脚本侧默认 3 天，页面不回传 `expiresAt`，脚本仍兼容传入但页面不发送）：
 
 ```json
 {
   "state": "一次性 state",
-  "encrypt": "短期认证凭证",
-  "expiresAt": "可选 ISO 时间"
+  "encrypt": "短期认证凭证"
 }
 ```
 
@@ -135,6 +144,7 @@ Keyring 同时存储 token 和过期时间。没有有效过期时间、已过�
 - receiver 只监听回环地址，避免对局域网或公网暴露。
 - 固定端口范围和路径，限制攻击面。
 - 使用一次性随机 `state` 防止伪造回传。
+- 使用与等待超时一致的 `request_expires_at` 约束链接有效期。
 - 使用严格 `Origin` 校验限制允许的认证页来源。
 - 只接受 JSON，并限制请求体大小。
 - 短期认证凭证通过 HTTPS 兑换。
@@ -156,7 +166,7 @@ Keyring 同时存储 token 和过期时间。没有有效过期时间、已过�
 
 - 文档中的命令参数与 `auth.py --help` 一致。
 - receiver 仍只监听回环地址、受限端口和固定路径。
-- `Origin`、`state`、请求格式和请求体大小校验未被绕过。
+- `Origin`、`state`、会话时效、请求格式和请求体大小校验未被绕过。
 - token 未出现在页面回传、日志或明文文件中。
 - 退出码 `0`、`1`、`4` 的含义保持稳定。
 - 调用方仍可区分成功、失败和未认证状态。

@@ -43,6 +43,21 @@ from credential_store import (
 )
 from errors import AuthError
 from runtime import ensure_keyring, setup_logging
+from session_store import (
+    SESSION_POLL_INTERVAL_SECONDS,
+    build_pending_session as _build_pending_session,
+    format_request_expiry as _format_request_expiry,
+    is_reusable_pending_session as _is_reusable_pending_session,
+    load_pending_session_locked as _load_pending_session_locked,
+    load_pending_session_snapshot as _load_pending_session_snapshot,
+    parse_iso_timestamp as _parse_iso_timestamp,
+    pending_session_lock as _pending_session_lock,
+    remaining_seconds as _remaining_seconds,
+    remove_pending_session as _remove_pending_session,
+    remove_pending_session_locked as _remove_pending_session_locked,
+    save_pending_session_locked as _save_pending_session_locked,
+    store_session_result as _store_session_result,
+)
 
 AUTH_EXPIRED_EXIT_CODE = 4
 MAX_REQUEST_BODY_BYTES = 16 * 1024
@@ -50,6 +65,45 @@ MAX_REQUEST_BODY_BYTES = 16 * 1024
 
 def _json_print(payload: dict) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _wait_for_existing_session(environment: str, session: dict) -> dict:
+    deadline = _parse_iso_timestamp(session.get("requestExpiresAt"))
+    if deadline is None:
+        return {"status": "expired", "authenticated": False, "message": "认证会话已失效，请重新发起认证"}
+
+    session_id = session["sessionId"]
+    while time.time() < deadline:
+        token, expiry, _source = _load_cached_token(environment)
+        if token:
+            return {
+                "status": "ok",
+                "authenticated": True,
+                "expires_at": expiry,
+                "reusedSession": True,
+            }
+
+        current = _load_pending_session_snapshot(environment)
+        if isinstance(current, dict) and current.get("sessionId") == session_id:
+            status = current.get("status")
+            if status == "error":
+                return {"status": "error", "message": current.get("message") or "认证失败"}
+            if status == "expired":
+                return {
+                    "status": "expired",
+                    "authenticated": False,
+                    "message": current.get("message") or "认证会话已过期，请重新发起认证",
+                }
+        elif isinstance(current, dict) and current.get("sessionId") != session_id:
+            return {
+                "status": "expired",
+                "authenticated": False,
+                "message": "已有新的认证会话，请使用最新的认证窗口或链接",
+            }
+
+        time.sleep(SESSION_POLL_INTERVAL_SECONDS)
+
+    return {"status": "expired", "authenticated": False, "message": "等待现有认证会话完成超时"}
 
 
 def _load_cached_token(environment: str) -> tuple[str | None, str | None, str]:
@@ -83,7 +137,8 @@ def _same_origin(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def _build_landing_url(base_url: str, state: str, receiver_url: str) -> str:
+def _build_landing_url(base_url: str, state: str, receiver_url: str,
+                       request_expires_at: str, session_id: str) -> str:
     separator = "&" if "?" in base_url else "?"
 
     win_config = {
@@ -97,6 +152,9 @@ def _build_landing_url(base_url: str, state: str, receiver_url: str) -> str:
         "navigation_to": "win",
         "state": state,
         "receiver": receiver_url,
+        "session_id": session_id,
+        "win_id": session_id,
+        "request_expires_at": request_expires_at,
         "win_config": json.dumps(win_config, ensure_ascii=False, separators=(",", ":")),
     }
 
@@ -114,27 +172,48 @@ def _open_browser(url: str) -> bool:
         return False
 
 
-def _get_browser_fallback_message(environment: str, landing_url: str) -> str | None:
+def _get_browser_fallback_message(environment: str, landing_url: str,
+                                  timeout_seconds: int, reused_session: bool = False) -> str | None:
     if environment != "test":
         return None
+    if reused_session:
+        return (
+            f"检测到已有待完成认证；请继续使用之前打开的认证窗口，或在剩余 {timeout_seconds} 秒内"
+            f"[点击这里]({landing_url})继续认证。"
+        )
     return (
-        f"正在打开 Teams 认证；如果没有自动拉起，请[点击这里]({landing_url})继续认证。"
+        f"正在打开 Teams 认证；如果没有自动拉起，请在 {timeout_seconds} 秒内"
+        f"[点击这里]({landing_url})继续认证。"
     )
 
 
-def _print_browser_fallback(environment: str, landing_url: str) -> None:
-    message = _get_browser_fallback_message(environment, landing_url)
+def _print_browser_fallback(environment: str, landing_url: str, timeout_seconds: int,
+                            reused_session: bool = False) -> None:
+    message = _get_browser_fallback_message(
+        environment,
+        landing_url,
+        timeout_seconds,
+        reused_session=reused_session,
+    )
     if not message:
         return
     print(message, file=sys.stderr, flush=True)
 
 
-def _build_browser_fallback_payload(environment: str, landing_url: str) -> dict[str, str]:
-    message = _get_browser_fallback_message(environment, landing_url)
+def _build_browser_fallback_payload(environment: str, landing_url: str, timeout_seconds: int,
+                                    request_expires_at: str,
+                                    reused_session: bool = False) -> dict[str, str]:
+    message = _get_browser_fallback_message(
+        environment,
+        landing_url,
+        timeout_seconds,
+        reused_session=reused_session,
+    )
     if not message:
         return {}
     return {
         "landingUrl": landing_url,
+        "requestExpiresAt": request_expires_at,
         "browserFallbackMessage": message,
     }
 
@@ -190,6 +269,9 @@ class _TokenReceiver(BaseHTTPRequestHandler):
         if not self._is_allowed_origin():
             self._send_json(403, {"code": 403, "message": "Origin 校验失败"})
             return
+        if time.time() >= self.server.request_deadline:
+            self._send_json(410, {"code": 410, "message": "认证会话已过期，请重新发起认证"})
+            return
         if not self.headers.get("Content-Type", "").lower().startswith("application/json"):
             self._send_json(415, {"code": 415, "message": "Content-Type 必须为 application/json"})
             return
@@ -236,11 +318,12 @@ class _TokenReceiver(BaseHTTPRequestHandler):
 
 
 def _create_token_receiver(port: int, state: str, allowed_origin: str,
-                           environment: str) -> HTTPServer:
+                           environment: str, request_deadline: float) -> HTTPServer:
     server = HTTPServer((RECEIVER_HOST, port), _TokenReceiver)
     server.expected_state = state
     server.allowed_origin = allowed_origin
     server.environment = environment
+    server.request_deadline = request_deadline
     server.result = None
     return server
 
@@ -255,6 +338,47 @@ def _wait_for_token(server: HTTPServer, timeout: int) -> dict:
         server.shutdown()
         return {"status": "expired", "authenticated": False, "message": "等待落地页回传短期认证凭证超时"}
     return server.result or {"status": "error", "message": "本地接收服务未收到有效结果"}
+
+
+def _get_or_create_pending_session(environment: str, landing_base_url: str, timeout: int,
+                                   preferred_port: int | None) -> tuple[dict, HTTPServer | None, bool]:
+    with _pending_session_lock(environment):
+        existing = _load_pending_session_locked(environment)
+        if _is_reusable_pending_session(existing, environment):
+            return existing, None, False
+        if existing:
+            _remove_pending_session_locked(environment)
+
+        port = _find_port(preferred_port)
+        state = secrets.token_urlsafe(24)
+        session_id = secrets.token_urlsafe(16)
+        request_deadline = time.time() + max(timeout, 0)
+        request_expires_at = _format_request_expiry(request_deadline)
+        receiver_url = f"http://{RECEIVER_HOST}:{port}/token"
+        landing_url = _build_landing_url(
+            landing_base_url,
+            state,
+            receiver_url,
+            request_expires_at,
+            session_id,
+        )
+        server = _create_token_receiver(
+            port,
+            state,
+            _same_origin(landing_base_url),
+            environment,
+            request_deadline,
+        )
+        session = _build_pending_session(
+            environment,
+            state,
+            session_id,
+            receiver_url,
+            landing_url,
+            request_expires_at,
+        )
+        _save_pending_session_locked(environment, session)
+        return session, server, True
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -313,6 +437,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.clear:
         removed = keyring_clear_token(args.env)
+        _remove_pending_session(args.env)
         payload = {
             "status": "ok",
             "message": (
@@ -332,6 +457,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.clear_all:
         results = keyring_clear_all_tokens()
+        for environment in LANDING_URLS:
+            _remove_pending_session(environment)
         payload = {
             "status": "ok",
             "message": "已清除所有环境的 token",
@@ -365,34 +492,68 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         landing_base_url = args.landing_url or LANDING_URLS[args.env]
-        allowed_origin = _same_origin(landing_base_url)
-        port = _find_port(args.port)
-        state = secrets.token_urlsafe(24)
-        receiver_url = f"http://{RECEIVER_HOST}:{port}/token"
-        landing_url = _build_landing_url(landing_base_url, state, receiver_url)
+        session, server, created_session = _get_or_create_pending_session(
+            args.env,
+            landing_base_url,
+            args.timeout,
+            args.port,
+        )
+        landing_url = session["landingUrl"]
+        request_expires_at = session["requestExpiresAt"]
+        receiver_url = session["receiver"]
+        session_id = session["sessionId"]
+        remaining_seconds = max(1, _remaining_seconds(request_expires_at))
         login_url = landing_url if args.open_url_directly else _build_scheme_url(args.env, landing_url)
-        server = _create_token_receiver(port, state, allowed_origin, args.env)
+        opened = False
+        if created_session:
+            _print_browser_fallback(args.env, landing_url, args.timeout)
+            opened = _open_browser(login_url)
+            logger.info("Landing page opened=%s receiver=%s session=%s", opened, receiver_url, session_id)
+            result = _wait_for_token(server, args.timeout)
+        else:
+            _print_browser_fallback(
+                args.env,
+                landing_url,
+                remaining_seconds,
+                reused_session=True,
+            )
+            logger.info("Reusing pending auth session receiver=%s session=%s", receiver_url, session_id)
+            result = _wait_for_existing_session(args.env, session)
 
-        _print_browser_fallback(args.env, landing_url)
-        opened = _open_browser(login_url)
-        logger.info("Landing page opened=%s port=%s", opened, port)
-        result = _wait_for_token(server, args.timeout)
+        _store_session_result(args.env, session_id, result)
 
         if result.get("status") == "ok":
+            # 成功后清理待完成会话文件；token 已在 keyring，复用进程从 keyring 取
+            _remove_pending_session(args.env)
             _json_print({
                 **result,
                 "message": "Login successful, gateway token cached.",
                 "environment": args.env,
                 "receiver": receiver_url,
+                "sessionId": session_id,
+                "winId": session["winId"],
                 "landingUrl": landing_url,
+                "requestExpiresAt": request_expires_at,
                 "landingUrlOpened": opened,
+                "reusedSession": not created_session,
             })
             return 0
         _json_print(
             {
                 **result,
                 "environment": args.env,
-                **_build_browser_fallback_payload(args.env, landing_url),
+                "receiver": receiver_url,
+                "sessionId": session_id,
+                "winId": session["winId"],
+                "requestExpiresAt": request_expires_at,
+                **_build_browser_fallback_payload(
+                    args.env,
+                    landing_url,
+                    remaining_seconds,
+                    request_expires_at,
+                    reused_session=not created_session,
+                ),
+                "reusedSession": not created_session,
             }
         )
         return AUTH_EXPIRED_EXIT_CODE if result.get("status") == "expired" else 1

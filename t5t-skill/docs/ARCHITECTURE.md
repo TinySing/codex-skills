@@ -257,22 +257,11 @@ t5t_client.create_request_context
 
 token 读取优先级：环境变量 `IM_TEAMS_GATEWAY_TOKEN_<ENV>` > Keyring。环境变量 token 无本地过期时间。
 
-### 7.2 认证原理
+### 7.2 认证流程（详见 im-teams-auth 文档）
 
-浏览器页面不能直接写系统钥匙串，所以：
+完整认证时序图、receiver 契约、会话复用和安全设计，统一维护在 `im-teams-auth` 的 [docs/ARCHITECTURE.md](../../im-teams-auth/docs/ARCHITECTURE.md)（§四 认证流程），此处不重复。
 
-1. 脚本启动只监听 `127.0.0.1` 的一次性 HTTP receiver，端口范围 `35101-35110`，路径固定 `/token`。
-2. 通过 Teams scheme 以 `navigation_to=win` 打开 `max-oplatform` 认证落地页：
-   - test: `teamssit://applink/link?url=<encoded landing>`
-   - production: `sk360teams://applink/link?url=<encoded landing>`
-   - 落地页：`/discover/imTeamsAuth`，带 `navigation_to=win`、`win_config`、`state`、`receiver`。
-3. 认证页从 Teams 已登录态生成**短期认证凭证**（不是长期 token）。
-4. 用户确认授权 → 页面 POST `{state, encrypt, expiresAt?}` 到 receiver。
-5. receiver 校验 `state` 与 `Origin` → 通过 HTTPS 调 `token/user/getTokenByEncrypt` 兑换长期 token。
-6. token 写入 OS Keyring（service `im-teams-auth:<env>`，key `gateway_token`，默认 3 天过期），脚本退出。
-7. 认证成功后 `t5t-skill` 重试原操作。
-
-> 长期 token 不经「页面 → 本地 receiver」传输，只在脚本侧 HTTPS 兑换。
+t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyring 读 token 注入请求头；长期 token 不经页面→receiver 传输，只在脚本侧 HTTPS 兑换。
 
 ### 7.3 浏览器兜底链接
 

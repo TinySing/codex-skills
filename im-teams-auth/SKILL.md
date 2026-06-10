@@ -21,8 +21,9 @@ description: 获取并缓存 360Teams 公网 IM token。通过 Teams 客户端�
 
 - `scripts/config.py`：只维护环境、URL、端口、超时、Keyring 名称等静态配置。
 - `scripts/credential_store.py`：负责环境规范化和 token 的 Keyring 读写、清理。
+- `scripts/session_store.py`：负责待完成认证会话的文件锁、读写、复用判定与时效计算。
 - `scripts/runtime.py`：负责日志初始化和 keyring 依赖检测。
-- `scripts/auth.py`：负责认证流程和本地 receiver。
+- `scripts/auth.py`：负责认证流程编排和本地 receiver。
 
 兼容性：
 
@@ -41,7 +42,7 @@ python3 --version || python --version || py -3 --version
 
 ## 原理
 
-浏览器页面不能直接写系统钥匙串。本技能的脚本会先启动一个只监听 `127.0.0.1` 的一次性 HTTP receiver，再通过 Teams scheme 以 `navigation_to=win` 打开 `max-oplatform` 认证页。认证页从 Teams 已登录态生成短期认证凭证，用户确认授权后通过 POST 回传给本地 receiver；脚本校验 `state` 和 `Origin`，通过 HTTPS 将短期凭证兑换为 token，写入 Keyring 并立即退出。长期 token 不经过页面到本地 receiver 的传输。
+浏览器页面不能直接写系统钥匙串。本技能的脚本会先启动一个只监听 `127.0.0.1` 的一次性 HTTP receiver，再通过 Teams scheme 以 `navigation_to=win` 打开 `max-oplatform` 认证页。脚本会为当前环境维护一个待完成认证会话；同一会话未超时前，后续重复认证请求必须复用同一个链接和 receiver，不得生成新的互斥链接。认证页从 Teams 已登录态生成短期认证凭证，用户确认授权后通过 POST 回传给本地 receiver；脚本校验 `state`、`Origin` 和认证会话时效，通过 HTTPS 将短期凭证兑换为 token，写入 Keyring 并立即退出。长期 token 不经过页面到本地 receiver 的传输。
 
 ## Commands
 
@@ -112,6 +113,8 @@ sk360teams://applink/link?url=<encoded landing url>
 
 凭证只存 OS Keyring，不写明文文件。Token 默认过期时间为 3 天。
 
+认证进行中会在 `cache/pending_session_<env>.json` 记录待完成会话（`state`、`receiver`、`landingUrl`、超时等元数据，**不含 token**），供并发触发时复用同一窗口；认证成功后删除，残留也会在下次运行按状态/时效清理。配套 `cache/pending_session_<env>.lock` 为短时互斥锁，进程异常退出残留时超过 30 秒会被自动抢占。
+
 Keyring 位置：
 
 - service: `im-teams-auth:production` 或 `im-teams-auth:test`
@@ -144,15 +147,16 @@ IM_TEAMS_GATEWAY_TOKEN_TEST
 3. 已认证则直接复用当前环境对应的 Keyring token。
 4. 未认证则执行 `python3 scripts/auth.py`，如需临时覆盖再显式传 `--env`。
 5. 脚本先启动本地 receiver：`http://127.0.0.1:35101-35110/token`。
-6. 脚本拼出认证页 URL，并带上 `navigation_to=win`、`win_config`、`state`、`receiver`。
+6. 脚本拼出认证页 URL，并带上 `navigation_to=win`、`win_config`、`state`、`receiver`、`request_expires_at`、`session_id`、`win_id`。
 7. 脚本打开 Teams scheme：`<scheme>applink/link?url=<encoded landing url>`。
    - 只有需要浏览器兜底的那类场景，脚本才会额外输出用户可点击的浏览器认证链接。
    - 该链接必须是认证落地页的 `https/http` 页面链接，不带 `teamssit://`、`sk360teams://` 等 scheme。
    - 代理拿到该链接后，必须明确提示用户“请点击下面链接在浏览器完成认证”，不能只保留在内部日志或工具输出里。
    - 该提示默认是认证过程中的并行兜底提示；如果当前业务命令还在继续执行，代理不得把这句提示表述成“流程已暂停”。
+   - 如果当前环境已经存在未超时的待完成认证会话，脚本必须复用已有链接，只提示用户继续使用同一个窗口或链接，不得再生成新的认证链接。
 8. Teams 客户端在窗口中打开认证页，页面从 Teams 已登录态生成短期认证凭证。
 9. 用户确认授权后，认证页 POST 短期认证凭证到 receiver。
-10. receiver 校验 `state` 和 `Origin`，通过 HTTPS 兑换 token，写入 Keyring 和过期时间。
+10. receiver 校验 `state`、`Origin` 和 `request_expires_at` 对应的会话时效，通过 HTTPS 兑换 token，写入 Keyring 和过期时间。
 11. 认证成功后重试原操作。
 
 ## 用户提示约束
@@ -183,16 +187,18 @@ IM_TEAMS_GATEWAY_TOKEN_TEST
 - `win_config`: Teams 窗口配置。
 - `state`: 本地脚本生成的一次性随机值，用于防止其他页面伪造短期认证凭证回传。
 - `receiver`: 本地 receiver 地址，必须是 `http://127.0.0.1:35101-35110/token`，用于让认证页把短期认证凭证交回脚本。
+- `request_expires_at`: 本次认证会话的截止时间（ISO 时间），应与脚本等待超时保持一致；页面可以用它提示用户链接何时失效。
+- `session_id`: 本次认证会话 ID，由脚本生成；同一待完成认证会话内保持不变。
+- `win_id`: 客户端窗口 ID，固定复用 `session_id`，用于让 Teams 客户端区分并复用认证窗口。
 
 认证页必须从框架已登录态中生成短期认证凭证，不读取、展示或打印长期 token。
 
-POST 到 receiver 的 JSON：
+POST 到 receiver 的 JSON（只回传 `state` 和 `encrypt`；token 过期时间由脚本侧默认 3 天，页面不回传 `expiresAt`，脚本仍兼容传入但页面不再发送）：
 
 ```json
 {
   "state": "一次性 state",
-  "encrypt": "框架生成的短期认证凭证",
-  "expiresAt": "可选 ISO 时间"
+  "encrypt": "框架生成的短期认证凭证"
 }
 ```
 
@@ -203,6 +209,7 @@ POST 到 receiver 的 JSON：
 - 页面只能向 receiver 回传短期认证凭证，禁止回传长期 token。
 - receiver 必须校验请求 `Origin` 与落地页 Origin 一致。
 - `state` 必须校验，且本次认证只接受一次成功 POST。
+- receiver 必须拒绝超过 `request_expires_at` 的回传。
 - token 不得写入日志或明文文件。
 - receiver 超时后必须退出。
 - 认证过期或未认证统一返回退出码 `4`。
