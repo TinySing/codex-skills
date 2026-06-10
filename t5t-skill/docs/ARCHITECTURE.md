@@ -90,25 +90,28 @@
 
 ---
 
-## 四、写入主流程：先查询，后分支
+## 四、写入主流程：dry-run 先行
 
-用户第一次确认「写入系统」后，**先查可填写周期**：
+用户确认写入后，**第一次调用就是新建 dry-run**（脚本自身先查周期、不提交），无需单独 `--check`。按返回分支：
 
-```bash
-python3 scripts/submit_t5t.py --check
-```
-
-- `status: available` → 存在可填写周期 → 进入【新建分支】。
-- `status: already_submitted` → 周期列表为空，最新周期已填 → 禁止新建 → 询问用户是否查询/修改最新 T5T → 同意则进入【查询编辑分支】。
+- `status: dry_run` → 存在可填写周期 → 进入【新建分支】确认提交。
+- `status: already_submitted` → 周期已填、不能新建 → 用户本意是写新内容时，转「对比并更新」：查最新详情 → 列出现有内容 vs 新内容差异 → 一次确认更新意图 → 确认即直接覆盖（不二次确认），对用户措辞用“更新”。
 
 ```mermaid
 flowchart TD
-  A[用户确认写入] --> B[submit_t5t.py --check]
-  B -->|available| C[新建分支]
-  B -->|already_submitted| D{用户是否查询/修改最新?}
-  D -->|否| E[结束]
-  D -->|是| F[查询编辑分支]
+  A[用户确认写入] --> B[submit_t5t.py --dry-run]
+  B -->|dry_run| C[展示并确认 → skip-confirmation 提交]
+  B -->|already_submitted| G[query-latest 查现有]
+  G --> H{canOperate?}
+  H -->|false| I[告知不可修改, 结束]
+  H -->|true| J[列差异, 一次确认更新]
+  J -->|确认| K[edit dry-run+skip-confirmation 直接覆盖]
+  J -->|否| E[结束]
 ```
+
+> 内容是覆盖式更新（保留原抄送人/同组可见），但面向用户一律说“更新”，不说“覆盖/dry-run”。
+
+> `--check` 仍可单独查周期，但常规写入不需要它（dry-run 已含周期检查），少一次往返。
 
 ---
 
@@ -116,7 +119,7 @@ flowchart TD
 
 ### 阶段一：确认新建信息（dry-run，不提交）
 
-仅在 `--check` 返回 `available` 后执行：
+写入流程的第一次脚本调用（无需先 `--check`）：
 
 ```bash
 python3 scripts/submit_t5t.py --dry-run --items-json '<T5T JSON>'
@@ -131,14 +134,17 @@ python3 scripts/submit_t5t.py --dry-run --items-json '<T5T JSON>'
 5. 组装 `create` payload，计算 `confirmationHash`。
 6. 输出 `status: dry_run` / `mode: create` / 周期 / 权限 / payload，**立即中断**。
 
-代理只向用户展示：
+代理把要提交的关键信息一次性展示清楚，作为唯一提交确认：
 
 ```text
+即将提交：
 周期：<周期名称>
-权限：<抄送人姓名和组织路径；没有则显示无抄送人>
+内容：
+1. ...
+抄送人：<姓名和组织路径；没有则显示无抄送人>
 同组可见：<同组可见 或 同组不可见>
 
-是否确定写入？
+确认提交吗？
 ```
 
 > 同组可见默认 `true`，可选传 `--invite-same-group true|false` 覆盖；用户要求同组不可见时传 `false`。
@@ -248,14 +254,17 @@ python3 scripts/edit_t5t.py --skip-confirmation \
 ```
 t5t_client.create_request_context
   → load_token(env)
-      → _ensure_im_teams_auth(env)
-          → auth.py --check --env <env>      # 退出码 0=已认证, 4=未认证/过期
-          → 若退出码 4: auth.py --env <env>  # 拉起认证（实时转发 stderr 提示）
-      → credential_store.keyring_load_token(env)  # 读取 token
+      → _read_cached_token(env)              # 快路径：先直接读 环境变量/Keyring
+          ├─ 命中有效 token → 直接返回（不 spawn auth 子进程）
+          └─ 未命中/过期 → _ensure_im_teams_auth(env)
+                              → auth.py --check（退 0 复用 / 退 4 拉认证）
+                              → 再 _read_cached_token(env)
   → build_headers(token)                     # 注入 Authorization（裸 token，不加 Bearer）
 ```
 
 token 读取优先级：环境变量 `IM_TEAMS_GATEWAY_TOKEN_<ENV>` > Keyring。环境变量 token 无本地过期时间。
+
+> **快路径优化**：token 在 Keyring/环境变量里有效时，每次脚本调用直接复用，不再 spawn `auth.py --check` 子进程；只有缺失或过期才拉起认证。
 
 ### 7.2 认证流程（详见 im-teams-auth 文档）
 
@@ -327,9 +336,9 @@ t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyr
 
 | 脚本 | status | 含义 | 下一步 |
 |------|--------|------|--------|
-| submit `--check` | `available` | 有可填写周期 | 进入新建 dry-run |
-| submit `--check` | `already_submitted` | 周期已填 | 问是否查/改最新 |
-| submit `--dry-run` | `dry_run` (create) | 新建待确认 | 展示并问是否写入 |
+| submit `--dry-run` | `dry_run` (create) | 新建待确认（写入第一步） | 展示内容/周期/抄送人/同组可见，问确认提交 |
+| submit `--dry-run` | `already_submitted` | 周期已填 | 问是否查/改最新 |
+| submit `--check` | `available`/`already_submitted` | 仅查周期（可选，非常规流程） | — |
 | edit `--list-recent` | `recent_list` | 最近 N 条（只读） | 展示列表后结束 |
 | edit `--query-latest` | `latest_detail` | 最新详情 | 按 canOperate 分支 |
 | edit `--query-latest` | `not_found` | 无已填写 T5T | 结束 |

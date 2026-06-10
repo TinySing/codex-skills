@@ -114,8 +114,7 @@ def _ensure_im_teams_auth(environment: str) -> None:
         raise AuthExpiredError((auth.stdout or auth.stderr or "IM Teams 认证失败").strip())
 
 
-def load_token(environment: str) -> str:
-    _ensure_im_teams_auth(environment)
+def _load_credential_store():
     original_path = list(sys.path)
     original_config = sys.modules.pop("config", None)
     original_errors = sys.modules.pop("errors", None)
@@ -131,6 +130,7 @@ def load_token(environment: str) -> str:
             )
         credential_store = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(credential_store)
+        return credential_store
     finally:
         sys.path[:] = original_path
         sys.modules.pop("config", None)
@@ -140,10 +140,23 @@ def load_token(environment: str) -> str:
         if original_errors is not None:
             sys.modules["errors"] = original_errors
 
+
+def _read_cached_token(environment: str) -> str | None:
+    credential_store = _load_credential_store()
     env_token = os.environ.get(credential_store.env_token_name_for(environment))
     if env_token:
         return env_token
     token, _expiry = credential_store.keyring_load_token(environment)
+    return token or None
+
+
+def load_token(environment: str) -> str:
+    # 快路径：keyring/环境变量已有有效 token 时直接复用，避免每次都 spawn auth 子进程
+    token = _read_cached_token(environment)
+    if token:
+        return token
+    _ensure_im_teams_auth(environment)
+    token = _read_cached_token(environment)
     if not token:
         raise AuthExpiredError("IM Teams token 不存在或已过期")
     return token
