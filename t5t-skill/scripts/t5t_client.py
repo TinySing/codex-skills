@@ -60,6 +60,22 @@ class NetworkError(T5TError):
     pass
 
 
+def _load_gateway_errors():
+    """加载 im-teams-auth 的统一网关错误码分类（纯数据模块，无内部依赖）。"""
+    spec = importlib.util.spec_from_file_location(
+        "im_teams_auth_gateway_errors",
+        IM_TEAMS_AUTH_SCRIPTS_DIR / "gateway_errors.py",
+    )
+    if spec is None or spec.loader is None:
+        raise T5TError("无法加载统一网关错误码模块 gateway_errors.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+gateway_errors = _load_gateway_errors()
+
+
 def json_print(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -194,9 +210,11 @@ def request_json(
         ) as response:
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
-        if exc.code in (401, 403):
+        # 识别鉴权失效（删 token 重认证）与网络相关码；其余 HTTP 错误粗处理为服务端不可用。
+        if gateway_errors.is_auth_code(exc.code):
             raise AuthExpiredError("认证已失效或无权限，请重新认证后重试") from exc
-        # 服务端返回错误：对用户只说"服务暂时不可用"，不暴露 HTTP 状态码或内部细节。
+        if gateway_errors.is_network_code(exc.code):
+            raise NetworkError("网络连接失败，请稍后再试") from exc
         raise T5TError("服务暂时不可用，请稍后再试") from exc
     except (URLError, TimeoutError) as exc:
         raise NetworkError("网络连接失败，请稍后再试") from exc
@@ -205,8 +223,16 @@ def request_json(
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise T5TError("接口返回异常，请稍后再试") from exc
-    if payload.get("code") in (401, 403, 100401, 100403):
-        raise AuthExpiredError(payload.get("msg") or "认证失效或无权限")
+    # 成功（code 0）直接返回；鉴权失效码触发删 token + 重认证；网络相关码提示网络；
+    # 其余非 0 业务码不细分，交 ensure_success 统一报错（带步骤名）。
+    code = payload.get("code")
+    if code in (0, None):
+        return payload
+    if gateway_errors.is_auth_code(code):
+        # 服务端已判定 token 失效（即使本地未过期），触发删 token + 重认证。
+        raise AuthExpiredError("认证已失效，请重新认证")
+    if gateway_errors.is_network_code(code):
+        raise NetworkError("网络连接失败，请稍后再试")
     return payload
 
 

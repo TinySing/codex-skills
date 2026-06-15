@@ -27,6 +27,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="--list-recent 的每页条数",
     )
     parser.add_argument("--id", help="需要编辑的 T5T 详情 id")
+    parser.add_argument(
+        "--latest",
+        action="store_true",
+        help="编辑最新单条 T5T：自动定位 id，一条命令完成查最新→核对→提交，无需先 --query-latest 取 id",
+    )
     parser.add_argument("--items-json", help="修改后的完整 T5T JSON 数组")
     parser.add_argument("--content-file", help="包含修改后 T5T 内容的文件")
     parser.add_argument("--to-list-json", help="删除抄送人后的完整 toList JSON 数组")
@@ -108,8 +113,8 @@ def main(argv: list[str] | None = None) -> int:
                 "必须且只能使用 --query-latest、--list-recent、--dry-run、"
                 "--skip-confirmation 或 --commit-confirmed 之一"
             )
-        if not args.query_latest and not args.list_recent and not args.id:
-            raise t5t.T5TError("编辑时必须提供 --id")
+        if not args.query_latest and not args.list_recent and not args.id and not args.latest:
+            raise t5t.T5TError("编辑时必须提供 --id 或 --latest")
         if args.skip_confirmation and not args.confirmation_hash:
             raise t5t.T5TError("--skip-confirmation 提交时必须提供 --confirmation-hash")
 
@@ -161,12 +166,29 @@ def main(argv: list[str] | None = None) -> int:
             print_latest_detail(args.env, detail)
             return 0
 
-        detail_response, detail = t5t.query_detail(
-            base_url,
-            headers,
-            args.id,
-            args.timeout,
-        )
+        if args.id:
+            detail_response, detail = t5t.query_detail(
+                base_url,
+                headers,
+                args.id,
+                args.timeout,
+            )
+        else:
+            # --latest：自动定位最新单条，一条命令完成查最新→核对→提交，省去先 --query-latest 取 id。
+            _latest_response, detail_response, detail = t5t.query_latest_detail(
+                base_url,
+                headers,
+                args.timeout,
+            )
+            if detail_response is None or detail is None:
+                t5t.json_print(
+                    {
+                        "status": "not_found",
+                        "message": "未查询到已填写的 T5T",
+                        "environment": args.env,
+                    }
+                )
+                return 0
         payload = t5t.build_edit_payload(detail, values, to_list, invite_same_group)
         confirmation_hash = t5t.build_confirmation_hash(args.env, base_url, payload)
         output_items = values or t5t.parse_raw_content(payload["rawContent"])

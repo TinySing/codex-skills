@@ -41,6 +41,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="仅本地校验 --items-json 格式，不联网、不认证、不提交",
     )
+    parser.add_argument(
+        "--update-if-exists",
+        action="store_true",
+        help="本周已填写且可编辑时，用本次内容直接就地更新（用户已授权更新本周时用，一个进程内完成新建或更新）",
+    )
     t5t.add_common_args(parser)
     return parser.parse_args(argv)
 
@@ -142,6 +147,28 @@ def main(argv: list[str] | None = None) -> int:
                     headers,
                     args.timeout,
                 )
+                # 本周已填、可编辑、且用户已授权更新 → 直接用刚查到的详情就地编辑提交，
+                # 一个进程内完成，省去再起一次 edit 调用与详情重查。
+                if args.update_if_exists and detail and detail.get("canOperate"):
+                    payload = t5t.build_edit_payload(detail, values, None, invite_same_group)
+                    confirmation_hash = t5t.build_confirmation_hash(args.env, base_url, payload)
+                    commit_response = t5t.commit_payload(base_url, headers, payload, args.timeout)
+                    t5t.print_success(
+                        args.env,
+                        base_url,
+                        confirmation_hash,
+                        "edit",
+                        {
+                            "reportId": detail.get("reportId"),
+                            "name": detail.get("reportName") or detail.get("title"),
+                        },
+                        values,
+                        payload["toList"],
+                        {"detail": detail_response, "commit": commit_response},
+                        payload["inviteSameGroupView"],
+                        concise=args.commit_confirmed,
+                    )
+                    return 0
                 print_already_submitted(
                     args.env,
                     latest_response,

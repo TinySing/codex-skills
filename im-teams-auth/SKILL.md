@@ -34,6 +34,8 @@ description: 获取并缓存 360Teams 公网 IM token。通过 Teams 客户端�
 
 运行前置：脚本需要 Python 3.9+。**不要单独花一步探测解释器**——直接用 `python3` 运行需要的命令；只有报 `command not found`/`不是内部或外部命令`、或 macOS 弹「安装命令行开发者工具」、Windows 跳应用商店时，才依次换 `python`、`py -3` 重跑同一条命令，本任务后续沿用成功的那个（若由 `t5t-skill` 等业务 skill 调起，沿用业务 skill 已确定的解释器，脚本经 `sys.executable` 自动继承）。三者都不可用时再提示用户：「需要安装 Python 3.9+（https://www.python.org/downloads/），或确认 Python 已加入 PATH，然后重试」，不要直接断言没装，也不要反复重试同一命令。
 
+**脚本一律用绝对路径调用，不要依赖当前目录。** 下文命令里的 `scripts/auth.py` 是相对本 skill 目录写的；shell 的 cwd 不一定在这里，直接跑相对路径会报“文件不存在”。**把 `scripts/auth.py` 换成本 skill 目录（即本 SKILL.md 所在目录）的绝对路径再执行**，例如 `python3 <本skill目录>/scripts/auth.py ...`。不要先 `cd`、也不要先列目录结构猜路径。
+
 ## 原理
 
 浏览器页面不能直接写系统钥匙串。本技能的脚本会先启动一个只监听 `127.0.0.1` 的一次性 HTTP receiver，再通过 Teams scheme 以 `navigation_to=win` 打开 `max-oplatform` 认证页。脚本会为当前环境维护一个待完成认证会话；同一会话未超时前，后续重复认证请求必须复用同一个链接和 receiver，不得生成新的互斥链接。认证页从 Teams 已登录态生成短期认证凭证，用户确认授权后通过 POST 回传给本地 receiver；脚本校验 `state`、`Origin` 和认证会话时效，通过 HTTPS 将短期凭证兑换为 token，写入 Keyring 并立即退出。长期 token 不经过页面到本地 receiver 的传输。
@@ -194,7 +196,7 @@ IM_TEAMS_GATEWAY_TOKEN_TEST
 
 ## 与业务 Skill 的边界
 
-- `im-teams-auth` 负责：是否需要认证、如何认证、是否展示浏览器兜底链接、认证完成后的结果格式。
+- `im-teams-auth` 负责：是否需要认证、如何认证、是否展示浏览器兜底链接、认证完成后的结果格式；并维护统一网关错误码识别 `scripts/gateway_errors.py`（`is_auth_code` / `is_network_code`），供各业务 skill 共用：鉴权失效码 →「删本地 token + 重新认证」（`--start --no-cache` 已内置删 token）；网络相关码 → 提示用户网络问题。其余非 0 码不细分，业务 skill 按普通错误粗处理。
 - 业务 skill 负责：业务脚本遇认证失效以退出码 `4` 快速返回；代理按「调用方分支协议」显式调用本 skill，并在收到认证结果后决定是重试业务命令还是走降级流程。
 - 业务 skill 不负责：解释认证策略、补充浏览器认证条件、改写认证文案、推断是否应该给链接、在业务脚本内部嵌入交互式认证。
 
