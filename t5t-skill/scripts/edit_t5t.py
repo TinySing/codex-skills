@@ -48,6 +48,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="提交成功后提供预览链接",
     )
+    parser.add_argument(
+        "--validate-items",
+        action="store_true",
+        help="仅本地校验 --items-json 格式，不联网、不认证、不提交",
+    )
     t5t.add_common_args(parser)
     return parser.parse_args(argv)
 
@@ -81,6 +86,13 @@ def print_latest_detail(environment: str, detail: dict[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        # 纯本地格式校验：不联网、不认证。生成/修改内容后先自检，
+        # 不合格就重新生成再校验，全程零接口调用；合格后才走真正提交。
+        if args.validate_items:
+            values = t5t.read_items(args)
+            t5t.json_print({"status": "valid", "count": len(values)})
+            return 0
+
         selected_modes = sum(
             bool(mode)
             for mode in (
@@ -100,6 +112,16 @@ def main(argv: list[str] | None = None) -> int:
             raise t5t.T5TError("编辑时必须提供 --id")
         if args.skip_confirmation and not args.confirmation_hash:
             raise t5t.T5TError("--skip-confirmation 提交时必须提供 --confirmation-hash")
+
+        # 编辑内容格式先于任何网络请求校验：格式错时快速失败，不浪费查询接口。
+        editing = args.commit_confirmed or args.skip_confirmation or args.dry_run
+        values = to_list = invite_same_group = None
+        if editing:
+            values = t5t.read_items(args, required=False)
+            to_list = t5t.read_to_list(args)
+            invite_same_group = t5t.read_invite_same_group(args)
+            if values is None and to_list is None and invite_same_group is None:
+                raise t5t.T5TError("没检测到要修改的内容")
 
         base_url, headers = t5t.create_request_context(args)
         if args.list_recent:
@@ -145,12 +167,6 @@ def main(argv: list[str] | None = None) -> int:
             args.id,
             args.timeout,
         )
-        values = t5t.read_items(args, required=False)
-        to_list = t5t.read_to_list(args)
-        invite_same_group = t5t.read_invite_same_group(args)
-        if values is None and to_list is None and invite_same_group is None:
-            raise t5t.T5TError("编辑时必须修改 T5T 内容、抄送人或同组可见")
-
         payload = t5t.build_edit_payload(detail, values, to_list, invite_same_group)
         confirmation_hash = t5t.build_confirmation_hash(args.env, base_url, payload)
         output_items = values or t5t.parse_raw_content(payload["rawContent"])

@@ -36,6 +36,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="提交成功后提供预览链接",
     )
+    parser.add_argument(
+        "--validate-items",
+        action="store_true",
+        help="仅本地校验 --items-json 格式，不联网、不认证、不提交",
+    )
     t5t.add_common_args(parser)
     return parser.parse_args(argv)
 
@@ -78,6 +83,13 @@ def print_already_submitted(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        # 纯本地格式校验：不联网、不认证。模型生成内容后先用它自检，
+        # 不合格就重新生成再校验，全程零接口调用；合格后才走真正提交。
+        if args.validate_items:
+            values = t5t.read_items(args)
+            t5t.json_print({"status": "valid", "count": len(values)})
+            return 0
+
         selected_modes = sum(
             bool(mode)
             for mode in (
@@ -96,6 +108,12 @@ def main(argv: list[str] | None = None) -> int:
             raise t5t.T5TError(
                 "--skip-confirmation 提交时必须提供 --report-id 和 --confirmation-hash"
             )
+
+        # 提交内容格式先于任何网络请求校验：--items-json 格式错时快速失败，
+        # 不浪费查周期/查抄送人接口，模型按正确格式重新生成后再提交即可。
+        prevalidated = args.commit_confirmed or args.skip_confirmation
+        values = t5t.read_items(args) if prevalidated else None
+        invite_same_group = t5t.read_invite_same_group(args) if prevalidated else None
 
         base_url, headers = t5t.create_request_context(args)
         copies_result: tuple[dict[str, Any], list[Any]] | None = None
@@ -134,6 +152,21 @@ def main(argv: list[str] | None = None) -> int:
                 print_already_submitted(args.env)
             return 0
 
+        # 多个可填周期且未指定：交还代理让用户选，附 reportId 供二次提交（--report-id）。
+        # 只有一个周期则静默选用，不打扰用户。--check 仅做可填性预检，沿用第一个即可。
+        if not args.check and not args.report_id and len(periods) > 1:
+            t5t.json_print(
+                {
+                    "status": "period_choice",
+                    "environment": args.env,
+                    "periods": [
+                        {"reportId": p.get("reportId"), "name": p.get("name")}
+                        for p in periods
+                    ],
+                }
+            )
+            return 0
+
         selected_period = t5t.select_period(periods, args.report_id)
         if args.check:
             t5t.json_print(
@@ -148,8 +181,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
-        values = t5t.read_items(args)
-        invite_same_group = t5t.read_invite_same_group(args)
+        if not prevalidated:
+            values = t5t.read_items(args)
+            invite_same_group = t5t.read_invite_same_group(args)
         if copies_error is not None:
             raise copies_error
         assert copies_result is not None

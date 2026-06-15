@@ -50,6 +50,16 @@ class AuthExpiredError(T5TError):
     pass
 
 
+class FormatError(T5TError):
+    """用户内容/参数格式问题：可在本地修正后重新生成，不应重试或联网试错。"""
+    pass
+
+
+class NetworkError(T5TError):
+    """本机到服务的网络不通/超时：对用户明说是网络问题，不重试。"""
+    pass
+
+
 def json_print(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -61,7 +71,7 @@ def ensure_success(payload: Any, action: str) -> dict[str, Any]:
         detail = str(payload.get("msg") or "").strip()
         if detail:
             raise T5TError(f"{action}失败：{detail}")
-        raise T5TError(f"{action}失败（接口返回 code={payload.get('code')}）")
+        raise T5TError(f"{action}失败，请稍后再试")
     return payload
 
 
@@ -186,25 +196,15 @@ def request_json(
     except HTTPError as exc:
         if exc.code in (401, 403):
             raise AuthExpiredError("认证已失效或无权限，请重新认证后重试") from exc
-        raw = exc.read().decode("utf-8", errors="replace")
-        detail = ""
-        try:
-            body = json.loads(raw)
-            if isinstance(body, dict):
-                detail = str(body.get("msg") or body.get("message") or "").strip()
-        except json.JSONDecodeError:
-            pass
-        message = f"请求未成功（HTTP {exc.code}）"
-        if detail:
-            message = f"{message}：{detail}"
-        raise T5TError(message) from exc
-    except URLError as exc:
-        raise T5TError("网络连接失败，请检查网络后重试") from exc
+        # 服务端返回错误：对用户只说"服务暂时不可用"，不暴露 HTTP 状态码或内部细节。
+        raise T5TError("服务暂时不可用，请稍后再试") from exc
+    except (URLError, TimeoutError) as exc:
+        raise NetworkError("网络连接失败，请稍后再试") from exc
 
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise T5TError("接口返回异常，请稍后重试") from exc
+        raise T5TError("接口返回异常，请稍后再试") from exc
     if payload.get("code") in (401, 403, 100401, 100403):
         raise AuthExpiredError(payload.get("msg") or "认证失效或无权限")
     return payload
@@ -341,7 +341,7 @@ def read_items(args: argparse.Namespace, required: bool = True) -> list[str] | N
             else sys.stdin.read()
         ).strip()
         if not text:
-            raise T5TError("T5T 内容为空")
+            raise FormatError("T5T 内容为空")
         try:
             raw = json.loads(text)
         except json.JSONDecodeError:
@@ -351,7 +351,7 @@ def read_items(args: argparse.Namespace, required: bool = True) -> list[str] | N
 
 def extract_values(raw: Any) -> list[str]:
     if not isinstance(raw, list):
-        raise T5TError("T5T 内容必须是 JSON 数组或逐行文本")
+        raise FormatError("T5T 内容必须是 JSON 数组或逐行文本")
     values = []
     for item in raw:
         if isinstance(item, str):
@@ -363,12 +363,12 @@ def extract_values(raw: Any) -> list[str]:
         if value:
             values.append(value)
     if not values:
-        raise T5TError("请至少提供一条 T5T")
+        raise FormatError("请至少提供一条 T5T")
     if len(values) > 5:
-        raise T5TError("T5T 最多只能提供 5 条")
+        raise FormatError("T5T 最多只能提供 5 条")
     for index, value in enumerate(values, start=1):
         if len(value) > 80:
-            raise T5TError(f"第 {index} 条超过 80 个字符")
+            raise FormatError(f"第 {index} 条超过 80 个字符")
     return values
 
 
@@ -423,9 +423,9 @@ def read_to_list(args: argparse.Namespace) -> list[Any] | None:
     try:
         to_list = json.loads(args.to_list_json)
     except json.JSONDecodeError as exc:
-        raise T5TError(f"权限 JSON 解析失败: {exc}") from exc
+        raise FormatError(f"权限 JSON 解析失败: {exc}") from exc
     if not isinstance(to_list, list):
-        raise T5TError("权限必须是 JSON 数组")
+        raise FormatError("权限必须是 JSON 数组")
     return to_list
 
 
@@ -445,7 +445,7 @@ def validate_reduced_to_list(
     to_list: list[Any],
 ) -> None:
     if len(to_list) >= len(current_to_list):
-        raise T5TError("编辑抄送人时只能删除现有人员")
+        raise FormatError("编辑抄送人时只能删除现有人员")
 
     current_counts: dict[str, int] = {}
     for person in current_to_list:
@@ -455,7 +455,7 @@ def validate_reduced_to_list(
     for person in to_list:
         key = json.dumps(person, ensure_ascii=False, sort_keys=True)
         if not current_counts.get(key):
-            raise T5TError("抄送人只能从当前权限中删除，不能新增或修改")
+            raise FormatError("抄送人只能从当前权限中删除，不能新增或修改")
         current_counts[key] -= 1
 
 
@@ -670,17 +670,46 @@ def print_error(error: Exception, environment: str) -> int:
             }
         )
         return AUTH_EXPIRED_EXIT_CODE
-    message = str(error)
-    if isinstance(error, json.JSONDecodeError):
-        message = f"T5T JSON 解析失败: {error}"
+    if isinstance(error, (FormatError, json.JSONDecodeError)):
+        message = str(error)
+        if isinstance(error, json.JSONDecodeError):
+            message = f"T5T JSON 解析失败: {error}"
+        json_print(
+            {
+                "status": "error",
+                "message": message,
+                "hint": (
+                    "内容或参数格式不符，请在本地修正后重新生成内容再提交"
+                    "（内容可先用 --validate-items 本地自检），最多 3 次；"
+                    "不要联网试错，也不要重试提交接口。"
+                ),
+                "environment": environment,
+            }
+        )
+        return 1
+    if isinstance(error, NetworkError):
+        json_print(
+            {
+                "status": "error",
+                "message": str(error),
+                "hint": (
+                    "这是网络连接问题。不要重试、不要连环调用其他接口排查；"
+                    "明确告诉用户是网络连接失败、请检查网络后稍后再试，"
+                    "并把已生成的 T5T 内容交给用户。"
+                ),
+                "environment": environment,
+            }
+        )
+        return 1
+    # 服务端/系统错误：一次失败即停，不重试。
     json_print(
         {
             "status": "error",
-            "message": message,
+            "message": str(error),
             "hint": (
-                "参数或内容格式问题请修正后重试一次；"
-                "系统或网络问题不要反复重试、不要连环调用其他接口排查，"
-                "直接把已生成的 T5T 内容交给用户，并用一句话说明系统暂时不可用。"
+                "这是服务端/系统问题。不要重试、不要连环调用其他接口排查；"
+                "告诉用户系统暂时不可用、稍后再试，不要暴露 code 或接口细节，"
+                "并把已生成的 T5T 内容交给用户。"
             ),
             "environment": environment,
         }
