@@ -52,19 +52,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def print_latest_detail(
-    environment: str,
-    latest_response: dict[str, Any],
-    detail_response: dict[str, Any],
-    detail: dict[str, Any],
-) -> None:
+def print_latest_detail(environment: str, detail: dict[str, Any]) -> None:
     to_list = detail.get("toList") or []
     if not isinstance(to_list, list):
         raise t5t.T5TError("详情中的权限格式异常")
+    # 只输出编辑和展示需要的字段；完整接口响应不回显，减少代理要读的内容
     t5t.json_print(
         {
             "status": "latest_detail",
             "environment": environment,
+            "id": detail.get("id"),
             "period": {
                 "reportId": detail.get("reportId"),
                 "name": detail.get("reportName") or detail.get("title"),
@@ -77,11 +74,6 @@ def print_latest_detail(
                 detail.get("inviteSameGroupView", True)
             ),
             "canOperate": bool(detail.get("canOperate")),
-            "detail": detail,
-            "responses": {
-                "selfWeekly": latest_response,
-                "detail": detail_response,
-            },
         }
     )
 
@@ -111,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
 
         base_url, headers = t5t.create_request_context(args)
         if args.list_recent:
-            list_response, items = t5t.query_self_weekly_list(
+            _list_response, items = t5t.query_self_weekly_list(
                 base_url,
                 headers,
                 args.page_num,
@@ -126,12 +118,11 @@ def main(argv: list[str] | None = None) -> int:
                     "pageSize": args.page_size,
                     "count": len(items),
                     "records": [t5t.format_recent_item(item) for item in items],
-                    "responses": {"selfWeekly": list_response},
                 }
             )
             return 0
         if args.query_latest:
-            latest_response, detail_response, detail = t5t.query_latest_detail(
+            _latest_response, detail_response, detail = t5t.query_latest_detail(
                 base_url,
                 headers,
                 args.timeout,
@@ -145,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                     }
                 )
                 return 0
-            print_latest_detail(args.env, latest_response, detail_response, detail)
+            print_latest_detail(args.env, detail)
             return 0
 
         detail_response, detail = t5t.query_detail(

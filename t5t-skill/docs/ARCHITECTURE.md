@@ -80,7 +80,7 @@
    - 只给已有 T5T → 按要求改，保留原意。
    - 无材料 → 建议补充数据来源，不直接生成。
 2. **生成准则**：最多 5 条 / 每条一句话 / ≤80 字 / 按优先级 / 真实客观 / 去琐碎。
-3. **生成后必须询问是否写入系统**，默认不自动写入。即使用户一开始就要求写入，也要先展示待写入内容再确认。
+3. **写入授权按 SKILL.md「提交意图与确认」执行**：用户已明确表达提交意图（“提交/写入/直接更新”等）→ 直接提交不再确认；只要求“生成/整理”→ 展示内容并确认一次；无提交意图 → 绝不自动写入。
 
 校验在脚本侧强制（`t5t_client.extract_values`）：
 
@@ -90,36 +90,70 @@
 
 ---
 
-## 四、写入主流程：dry-run 先行
+## 四、完整执行流程（标准路径：`--commit-confirmed` 一次完成）
 
-用户确认写入后，**第一次调用就是新建 dry-run**（脚本自身先查周期、不提交），无需单独 `--check`。按返回分支：
-
-- `status: dry_run` → 存在可填写周期 → 进入【新建分支】确认提交。
-- `status: already_submitted` → 周期已填、不能新建 → 用户本意是写新内容时，转「对比并更新」：查最新详情 → 列出现有内容 vs 新内容差异 → 一次确认更新意图 → 确认即直接覆盖（不二次确认），对用户措辞用“更新”。
+用户授权或确认后，一次调用完成核对与提交；dry-run 两阶段（§五/§六的两阶段细节）仅用于开发排查。完整流程图：
 
 ```mermaid
 flowchart TD
-  A[用户确认写入] --> B[submit_t5t.py --dry-run]
-  B -->|dry_run| C[展示并确认 → skip-confirmation 提交]
-  B -->|already_submitted| G[query-latest 查现有]
-  G --> H{canOperate?}
-  H -->|false| I[告知不可修改, 结束]
-  H -->|true| J[列差异, 一次确认更新]
-  J -->|确认| K[edit dry-run+skip-confirmation 直接覆盖]
-  J -->|否| E[结束]
+    U[用户请求] --> T{任务类型}
+    T -->|纯生成/润色/压缩| A1["生成 ≤5条 / ≤80字 / 按优先级<br/>（0 次脚本调用）"]
+    T -->|要写 T5T 但无材料| A0[请用户发送材料，不编造] --> END0[结束]
+    T -->|查询/编辑最新| C["edit_t5t.py --query-latest"]
+    T -->|浏览最近 N 条| D["edit_t5t.py --list-recent"] --> D1[展示列表，结束]
+
+    A1 --> Q{用户已明确提交意图?}
+    Q -->|否| C1["展示内容，问一次：要写入系统吗?"]
+    C1 -->|不写| END1[交付文本，结束]
+    C1 -->|确认| B
+    Q -->|是| B["submit_t5t.py --commit-confirmed<br/>（脚本内并行查周期+抄送人 → 组装 → 提交）"]
+
+    B -->|ok| OK["展示周期/内容/权限/同组可见/预览链接"]
+    B -->|already_submitted<br/>返回已含最新详情，禁止再查| X{canOperate?}
+    X -->|false| X0[告知本周期已有且不可修改，结束]
+    X -->|true| X1["展示 现有 vs 新内容<br/>问：调整，还是直接更新?"]
+    X1 -->|调整| X2[按要求修改，再问一次] --> X1
+    X1 -->|直接更新| E2["edit_t5t.py --commit-confirmed --id"]
+    E2 -->|ok| OK
+
+    C -->|not_found| C0[告知没有已填写记录，结束]
+    C -->|latest_detail| C2{canOperate?}
+    C2 -->|false 且要改| C3[告知当前不可修改，结束]
+    C2 -->|true| C4{原请求?}
+    C4 -->|只查| C5[展示后结束，不追问]
+    C4 -->|含修改+提交意图| E2
+    C4 -->|含修改无提交意图| C6[展示修改结果，确认一次] -->|确认| E2
+
+    B -.->|exit 4 认证失效| F1["auth.py --start --no-cache（秒回）"]
+    C -.->|exit 4| F1
+    D -.->|exit 4| F1
+    E2 -.->|exit 4| F1
+    F1 -->|pending| F2["立即发认证链接给用户：<br/>schemeUrl 必发，输出含 landingUrl 时附浏览器链接<br/>（窗口被关可点链接重开）"]
+    F2 --> F3["auth.py --wait 等待授权"]
+    F3 -->|0| F4[重试原命令一次]
+    F4 -->|成功| OK
+    F4 -->|仍失败| G
+    F3 -->|4 或 1| G[降级交付]
+    F1 -->|error| G
+    B -.->|exit 1 系统错误| G
+    C -.->|exit 1| G
+    D -.->|exit 1| G
+    E2 -.->|exit 1| G
+    G --> G1["写入类：交付已生成内容 + 手动提交指引<br/>只读类：一句话说明 + 请在 Teams 查看<br/>（全任务最多 1 轮认证、1 次重试）"]
 ```
 
 > 内容是覆盖式更新（保留原抄送人/同组可见），但面向用户一律说“更新”，不说“覆盖/dry-run”。
-
-> `--check` 仍可单独查周期，但常规写入不需要它（dry-run 已含周期检查），少一次往返。
+> `--check` 仍可单独查周期，常规写入不需要（`--commit-confirmed` 已含周期检查）。
 
 ---
 
-## 五、新建分支（两阶段，必须二次确认）
+## 五、新建分支：两阶段兼容模式（仅开发排查用）
+
+> 标准流程是 §四 的 `--commit-confirmed` 一次完成。本节的 dry-run + skip-confirmation 两阶段仅用于开发排查或需要人工核对 payload 的场景，常规任务不要走。
 
 ### 阶段一：确认新建信息（dry-run，不提交）
 
-写入流程的第一次脚本调用（无需先 `--check`）：
+两阶段模式的第一次脚本调用（无需先 `--check`）：
 
 ```bash
 python3 scripts/submit_t5t.py --dry-run --items-json '<T5T JSON>'
@@ -127,7 +161,7 @@ python3 scripts/submit_t5t.py --dry-run --items-json '<T5T JSON>'
 
 脚本严格顺序（`submit_t5t.main`）：
 
-1. 检查/获取 IM token（经 `im-teams-auth`，见第七节）。
+1. 读取缓存 IM token（未认证立即退出码 4，见第七节）。
 2. **再次查询周期列表**（避免确认期间状态变化）。
 3. 列表为空 → 输出 `already_submitted` 立即中断，不读内容、不查权限、不提交。
 4. 列表非空 → 取第一个周期，查 `latest/copies` 历史抄送人。
@@ -171,7 +205,9 @@ python3 scripts/submit_t5t.py --skip-confirmation \
 
 ---
 
-## 六、查询编辑分支（三步，必须二次确认）
+## 六、查询编辑分支
+
+> 标准流程：`--query-latest` 查询后直接 `--commit-confirmed --id` 提交（见 §四 流程图）。本节第二/三步的 dry-run 两阶段仅开发排查用。
 
 ### 第〇步（可选）：只读浏览最近 T5T
 
@@ -194,7 +230,7 @@ python3 scripts/edit_t5t.py --query-latest
 
 1. GET `/im/self?pageNum=1&pageSize=1`（查最新固定 1/1）取第一条的 `id`。
 2. GET `/queryById/{id}` 查详情。
-3. 输出 `status: latest_detail` / 周期 / 内容 / `toList` / 权限 / `inviteSameGroupView` / `canOperate` / 详情。
+3. 输出 `status: latest_detail` / `id` / 周期 / 内容 / `toList` / 权限 / `inviteSameGroupView` / `canOperate`（只输出编辑和展示需要的字段，不回显完整接口响应）。
 4. 列表为空 → 输出 `not_found`。
 
 代理展示周期、内容、权限、同组可见后分支：
@@ -247,24 +283,22 @@ python3 scripts/edit_t5t.py --skip-confirmation \
 
 ## 七、im-teams-auth 认证流程（被调用方）
 
-`t5t-skill` 任何系统请求前都会经 `t5t_client.load_token` → `_ensure_im_teams_auth` 拉起认证。**认证策略完全由 `im-teams-auth` 定义**，`t5t-skill` 只转述其结果，不补充认证话术。
+`t5t-skill` 任何系统请求前都会经 `t5t_client.load_token` 读取缓存 token。**认证策略完全由 `im-teams-auth` 定义**，`t5t-skill` 只转述其结果，不补充认证话术。
 
-### 7.1 调用链
+### 7.1 调用链（fail-fast）
 
 ```
 t5t_client.create_request_context
   → load_token(env)
-      → _read_cached_token(env)              # 快路径：先直接读 环境变量/Keyring
-          ├─ 命中有效 token → 直接返回（不 spawn auth 子进程）
-          └─ 未命中/过期 → _ensure_im_teams_auth(env)
-                              → auth.py --check（退 0 复用 / 退 4 拉认证）
-                              → 再 _read_cached_token(env)
+      → _read_cached_token(env)              # 直接读 环境变量/Keyring
+          ├─ 命中有效 token → 直接返回（不 spawn 任何子进程）
+          └─ 未命中/过期 → 抛 AuthExpiredError → 退出码 4 + hint
   → build_headers(token)                     # 注入 Authorization（裸 token，不加 Bearer）
 ```
 
 token 读取优先级：环境变量 `IM_TEAMS_GATEWAY_TOKEN_<ENV>` > Keyring。环境变量 token 无本地过期时间。
 
-> **快路径优化**：token 在 Keyring/环境变量里有效时，每次脚本调用直接复用，不再 spawn `auth.py --check` 子进程；只有缺失或过期才拉起认证。
+> **业务脚本不再内嵌交互式认证**：交互认证需要监听本机端口并等待用户操作，嵌在业务调用里会长时间阻塞（沙箱里还会因端口绑定失败报错）。未认证时脚本立即退出码 4，由代理按 SKILL.md「失败与认证分支协议」显式拉起 `im-teams-auth`（全任务最多一次），成功后重试原命令一次。
 
 ### 7.2 认证流程（详见 im-teams-auth 文档）
 
@@ -308,11 +342,10 @@ t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyr
 - 仅开发者明确要求排查配置时才讨论环境选择。
 
 **流程安全**
-- 任何新建/查询/编辑前必须先查询，禁止在确认可操作前组装 payload。
-- 新建/编辑都必须二次确认，禁止跳过第二次用户确认。
+- 任何新建/查询/编辑前必须先查询，禁止在确认可操作前组装 payload（`--commit-confirmed` 由脚本内部完成实时核对）。
+- 写入必须获得用户授权：明确提交意图，或一次确认；已授权后禁止再次请求确认。
 - 周期列表为空时禁止继续新建、查历史抄送人、组装新建 payload。
-- 新建两次调用必须同环境、同内容、同 `reportId`、同 `confirmationHash`。
-- 编辑两次调用必须同环境、同 `id`、同修改内容、同权限参数、同 `confirmationHash`。
+- 使用兼容两阶段模式时：新建两次调用必须同环境、同内容、同 `reportId`、同 `confirmationHash`；编辑两次调用必须同环境、同 `id`、同修改内容、同权限参数、同 `confirmationHash`。
 
 **抄送人**
 - 新建：只能原样用 `latest/copies` 返回值。
@@ -344,5 +377,5 @@ t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyr
 | edit `--query-latest` | `not_found` | 无已填写 T5T | 结束 |
 | edit `--dry-run` | `dry_run` (edit) | 编辑待确认 | 展示并问是否提交 |
 | 任意 | `ok` | 提交成功 | 展示周期/内容/权限/同组可见/预览链接 |
-| 任意 | `expired` (退出码 4) | 认证失效 | 走 im-teams-auth 认证 |
-| 任意 | `error` | 业务错误 | 按 message 处理 |
+| 任意 | `expired` (退出码 4) | 认证失效 | `auth.py --start` 拉起认证并立即把 schemeUrl/landingUrl 链接发给用户，再 `auth.py --wait` 等结果（全任务最多一轮）；成功重试原命令一次，失败降级交付内容 |
+| 任意 | `error` | 业务错误 | 按 message/hint 处理；参数问题修正后重试一次，系统问题不重试，降级交付内容 |

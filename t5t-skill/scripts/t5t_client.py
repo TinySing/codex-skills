@@ -11,9 +11,7 @@ import json
 import os
 import platform
 import ssl
-import subprocess
 import sys
-import threading
 import uuid
 
 from typing import Any
@@ -32,7 +30,6 @@ from config import (
     DEFAULT_REQUEST_TIMEOUT,
     ENV_DOMAINS,
     IM_TEAMS_AUTH_CREDENTIAL_STORE,
-    IM_TEAMS_AUTH_SCRIPT,
     IM_TEAMS_AUTH_SCRIPTS_DIR,
     LATEST_COPIES_PATH,
     PERIOD_LIST_PATH,
@@ -61,59 +58,11 @@ def ensure_success(payload: Any, action: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise T5TError(f"{action}返回格式异常: {payload}")
     if payload.get("code") != 0:
-        raise T5TError(payload.get("msg") or f"{action}失败")
+        detail = str(payload.get("msg") or "").strip()
+        if detail:
+            raise T5TError(f"{action}失败：{detail}")
+        raise T5TError(f"{action}失败（接口返回 code={payload.get('code')}）")
     return payload
-
-
-def _run_auth_with_live_prompt(command: list[str]) -> subprocess.CompletedProcess[str]:
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    stderr_chunks: list[str] = []
-
-    def forward_stderr() -> None:
-        if process.stderr is None:
-            return
-        for line in process.stderr:
-            stderr_chunks.append(line)
-            sys.stderr.write(line)
-            sys.stderr.flush()
-
-    stderr_thread = threading.Thread(target=forward_stderr, daemon=True)
-    stderr_thread.start()
-    stdout, _ = process.communicate()
-    stderr_thread.join()
-    return subprocess.CompletedProcess(
-        args=command,
-        returncode=process.returncode or 0,
-        stdout=stdout,
-        stderr="".join(stderr_chunks),
-    )
-
-
-def _ensure_im_teams_auth(environment: str) -> None:
-    if not IM_TEAMS_AUTH_SCRIPT.exists():
-        raise AuthExpiredError(f"缺少 im-teams-auth 脚本: {IM_TEAMS_AUTH_SCRIPT}")
-
-    check = subprocess.run(
-        [sys.executable, str(IM_TEAMS_AUTH_SCRIPT), "--check", "--env", environment],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if check.returncode == 0:
-        return
-    if check.returncode != AUTH_EXPIRED_EXIT_CODE:
-        raise AuthExpiredError((check.stdout or check.stderr or "认证检查失败").strip())
-
-    auth = _run_auth_with_live_prompt(
-        [sys.executable, str(IM_TEAMS_AUTH_SCRIPT), "--env", environment],
-    )
-    if auth.returncode != 0:
-        raise AuthExpiredError((auth.stdout or auth.stderr or "IM Teams 认证失败").strip())
 
 
 def _load_credential_store():
@@ -153,15 +102,14 @@ def _read_cached_token(environment: str) -> str | None:
 
 
 def load_token(environment: str) -> str:
-    # 快路径：keyring/环境变量已有有效 token 时直接复用，避免每次都 spawn auth 子进程
+    # keyring/环境变量有有效 token 时直接复用。
+    # 未认证时立即退出码 4，不在业务脚本内部拉起交互式认证：
+    # 交互认证需要本机监听端口并等待用户操作，嵌在业务调用里会长时间阻塞，
+    # 认证统一由代理按 SKILL.md 分支协议显式调用 im-teams-auth。
     token = _read_cached_token(environment)
     if token:
         return token
-    _ensure_im_teams_auth(environment)
-    token = _read_cached_token(environment)
-    if not token:
-        raise AuthExpiredError("IM Teams token 不存在或已过期")
-    return token
+    raise AuthExpiredError("未认证或认证已过期")
 
 
 def load_current_environment() -> str:
@@ -246,9 +194,9 @@ def request_json(
                 detail = str(body.get("msg") or body.get("message") or "").strip()
         except json.JSONDecodeError:
             pass
-        message = "请求未成功，请稍后重试"
+        message = f"请求未成功（HTTP {exc.code}）"
         if detail:
-            message = f"{message}（{detail}）"
+            message = f"{message}：{detail}"
         raise T5TError(message) from exc
     except URLError as exc:
         raise T5TError("网络连接失败，请检查网络后重试") from exc
@@ -706,10 +654,35 @@ def print_success(
 
 def print_error(error: Exception, environment: str) -> int:
     if isinstance(error, AuthExpiredError):
-        json_print({"status": "expired", "message": str(error), "environment": environment})
+        json_print(
+            {
+                "status": "expired",
+                "message": str(error),
+                "hint": (
+                    "两段式认证：先运行 im-teams-auth/scripts/auth.py --start --no-cache"
+                    "（秒级返回；必须带 --no-cache，本地缓存的 token 可能已被服务端判定失效），"
+                    "把返回的 schemeUrl（及输出包含时的 landingUrl）以可点击链接立即发给用户"
+                    "（窗口没弹出或被关掉时点链接可重新打开），再运行 auth.py --wait 等待结果。"
+                    "认证成功后重试原命令一次；认证失败或重试仍失败时，停止调用接口，"
+                    "把已生成的 T5T 内容直接交给用户并说明需手动提交。本次任务最多一轮认证。"
+                ),
+                "environment": environment,
+            }
+        )
         return AUTH_EXPIRED_EXIT_CODE
     message = str(error)
     if isinstance(error, json.JSONDecodeError):
         message = f"T5T JSON 解析失败: {error}"
-    json_print({"status": "error", "message": message, "environment": environment})
+    json_print(
+        {
+            "status": "error",
+            "message": message,
+            "hint": (
+                "参数或内容格式问题请修正后重试一次；"
+                "系统或网络问题不要反复重试、不要连环调用其他接口排查，"
+                "直接把已生成的 T5T 内容交给用户，并用一句话说明系统暂时不可用。"
+            ),
+            "environment": environment,
+        }
+    )
     return 1

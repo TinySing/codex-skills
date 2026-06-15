@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import t5t_client as t5t
@@ -97,7 +98,25 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         base_url, headers = t5t.create_request_context(args)
-        period_response, periods = t5t.query_periods(base_url, headers, args.timeout)
+        copies_result: tuple[dict[str, Any], list[Any]] | None = None
+        copies_error: t5t.T5TError | None = None
+        if args.check:
+            period_response, periods = t5t.query_periods(base_url, headers, args.timeout)
+        else:
+            # 周期列表与历史抄送人互不依赖，并行查询省一次网络往返；
+            # 周期为空（冲突分支）时抄送人结果直接丢弃，无副作用（只读接口）
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                periods_future = pool.submit(
+                    t5t.query_periods, base_url, headers, args.timeout
+                )
+                copies_future = pool.submit(
+                    t5t.query_latest_copies, base_url, headers, args.timeout
+                )
+                period_response, periods = periods_future.result()
+                try:
+                    copies_result = copies_future.result()
+                except t5t.T5TError as exc:
+                    copies_error = exc
         if not periods:
             if args.commit_confirmed:
                 latest_response, detail_response, detail = t5t.query_latest_detail(
@@ -125,18 +144,16 @@ def main(argv: list[str] | None = None) -> int:
                         "reportId": selected_period.get("reportId"),
                         "name": selected_period.get("name"),
                     },
-                    "responses": {"periodList": period_response},
                 }
             )
             return 0
 
         values = t5t.read_items(args)
         invite_same_group = t5t.read_invite_same_group(args)
-        copies_response, copies = t5t.query_latest_copies(
-            base_url,
-            headers,
-            args.timeout,
-        )
+        if copies_error is not None:
+            raise copies_error
+        assert copies_result is not None
+        copies_response, copies = copies_result
         payload = t5t.build_create_payload(
             selected_period, copies, values, invite_same_group
         )

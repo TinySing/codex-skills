@@ -13,3 +13,9 @@
 2026-06-09 14:19:34,243 [INFO] __main__ main:347: Landing page opened=True port=35101
 2026-06-09 14:30:14,761 [INFO] __main__ main:352: Landing page opened=True port=35101
 2026-06-09 14:37:05,470 [INFO] __main__ main:351: Landing page opened=True port=35101
+2026-06-11 20:17:54,586 [INFO] __main__ main:511: Landing page opened=True receiver=http://127.0.0.1:35101/token session=O0OdDyl9QmsnFOrrv7HunA
+2026-06-11 20:21:13,264 [INFO] __main__ main:511: Landing page opened=True receiver=http://127.0.0.1:35101/token session=qiE7_Z4yhFkCdhyJ0QBcJA
+2026-06-11 20:28:48,093 [INFO] __main__ main:511: Landing page opened=True receiver=http://127.0.0.1:35101/token session=z7O_HyFjc-JgnabWP1q2FQ
+2026-06-12 11:33:43,284 [INFO] __main__ main:511: Landing page opened=True receiver=http://127.0.0.1:35101/token session=shPJU85KAyjimo3Q3fAp0g
+2026-06-12 11:45:46,855 [INFO] __main__ main:637: Landing page opened=False receiver=http://127.0.0.1:35101/token session=mFLiu9uyhHpRfjAIpHwK4g
+2026-06-12 11:52:32,712 [INFO] __main__ main:637: Landing page opened=False receiver=http://127.0.0.1:35101/token session=kvQrgjHz3shKWhb1phJ9kQ
