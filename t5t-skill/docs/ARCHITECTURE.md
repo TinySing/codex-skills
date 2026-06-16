@@ -71,6 +71,28 @@
 | 提交（新建+编辑共用） | POST | `/dgt/tft/weekly/report/commit` |
 | 预览页 | — | `/applink/page/t5t?...`（applink scheme） |
 
+统一网关错误码分类由 `../im-teams-auth/scripts/gateway_errors.py` 提供（跨 skill 共享）：`is_auth_code`（401/403/100401/100403/10130/10220/10230/10241/10301/12001/12003/12004→认证失效，删 token 重认证）、`is_network_code`（408/502/504/9999→提示网络）；其余非 0 码按普通错误粗处理。
+
+### 脚本关键参数速查
+
+| 脚本 | 参数 | 作用 |
+|------|------|------|
+| submit | `--commit-confirmed` | 标准：查周期→组装→提交，一次完成（新建） |
+| submit | `--update-if-exists` | 配合 commit：本周没填→新建，已填可改→就地更新，单进程搞定 |
+| submit | `--report-id <id>` | 多周期（`period_choice`）时指定要写入的周期 |
+| submit | `--validate-items` | 纯本地校验 `--items-json` 格式，不联网/不认证/不提交 |
+| submit/edit | `--items-json '<JSON 数组>'` | 提交内容；**强制纯字符串数组** `["a","b"]`，≤5 条、每条 ≤80 字、无空串、不包对象 |
+| submit/edit | `--open-preview` | 提交成功后返回预览链接 |
+| submit/edit | `--invite-same-group true\|false` | 同组可见（不传：新建默认 true / 编辑保留原值） |
+| edit | `--query-latest` | 查最新详情（只读） |
+| edit | `--list-recent --page-size/--page-num` | 只读分页浏览最近 |
+| edit | `--commit-confirmed --latest` | 一步更新最新单条：自动定位 id→核对→提交 |
+| edit | `--commit-confirmed --id <id>` | 编辑指定 id |
+| edit | `--to-list-json '<JSON>'` | 删抄送人（只能删，人数严格少于当前） |
+| 两者 | `--check`/`--dry-run`/`--skip-confirmation` | 仅开发排查（见 §五/§六） |
+
+> 提交命令在联网前已就地校验 `--items-json` 格式，格式错不联网就秒级返回，无需另跑 `--validate-items`。
+
 ---
 
 ## 三、内容生成阶段（不涉及系统调用）
@@ -106,12 +128,12 @@ flowchart TD
     Q -->|否| C1["展示内容，问一次：要写入系统吗?"]
     C1 -->|不写| END1[交付文本，结束]
     C1 -->|确认| B
-    Q -->|是| B["submit_t5t.py --commit-confirmed<br/>（脚本内并行查周期+抄送人 → 组装 → 提交）"]
+    Q -->|是| B["submit_t5t.py --commit-confirmed<br/>（默认 plain：撞已填走冲突询问，不覆盖）<br/>仅用户明确要更新已有内容才加 --update-if-exists（会静默覆盖）<br/>脚本内并行查周期+抄送人 → 组装 → 提交"]
 
-    B -->|ok| OK["展示周期/内容/权限/同组可见/预览链接"]
-    B -->|already_submitted<br/>返回已含最新详情，禁止再查| X{canOperate?}
+    B -->|ok| OK["展示周期/内容/抄送人(无则无抄送人)/同组可见/预览链接"]
+    B -->|already_submitted<br/>未带 --update-if-exists 时；返回已含最新详情，禁止再查| X{canOperate?}
     X -->|false| X0[告知本周期已有且不可修改，结束]
-    X -->|true| X1["展示 现有 vs 新内容<br/>问：调整，还是直接更新?"]
+    X -->|true| X1["默认：告知最新周期已有一版T5T→展示现有vs新→问 更新还是保留<br/>（绝不静默覆盖；仅用户原就明确要更新现有才直接更新）"]
     X1 -->|调整| X2[按要求修改，再问一次] --> X1
     X1 -->|直接更新| E2["edit_t5t.py --commit-confirmed --id"]
     E2 -->|ok| OK
@@ -128,7 +150,7 @@ flowchart TD
     C -.->|exit 4| F1
     D -.->|exit 4| F1
     E2 -.->|exit 4| F1
-    F1 -->|pending| F2["立即发认证链接给用户：<br/>schemeUrl 必发，输出含 landingUrl 时附浏览器链接<br/>（窗口被关可点链接重开）"]
+    F1 -->|pending| F2["立即发认证链接给用户：<br/>appLinkUrl（https，任何客户端可点）发给用户<br/>schemeUrl 仅内部自动拉起、不发用户<br/>输出含 landingUrl 时附浏览器链接（窗口被关可点链接重开，只发一次）"]
     F2 --> F3["auth.py --wait 等待授权"]
     F3 -->|0| F4[重试原命令一次]
     F4 -->|成功| OK
@@ -298,6 +320,8 @@ t5t_client.create_request_context
 
 token 读取优先级：环境变量 `IM_TEAMS_GATEWAY_TOKEN_<ENV>` > Keyring。环境变量 token 无本地过期时间。
 
+> **两层失效检测**：①本地预检——`load_token` 读 Keyring 时校验本地过期时间，过期/缺失即退出码 4（不联网）；②服务端兜底——本地 token 看似有效但已被服务端作废时，业务接口会返回认证类网关码（见 §二 `gateway_errors.is_auth_code`，如 10230/12001 等），`request_json` 据此抛 `AuthExpiredError` → 退出码 4。两者都走同一条「`--start --no-cache`（删本地 token）重认证」补救。这就是「服务端失效但本地过期时间没到」也能被识别的机制。
+
 > **业务脚本不再内嵌交互式认证**：交互认证需要监听本机端口并等待用户操作，嵌在业务调用里会长时间阻塞（沙箱里还会因端口绑定失败报错）。未认证时脚本立即退出码 4，由代理按 SKILL.md「失败与认证分支协议」显式拉起 `im-teams-auth`（全任务最多一次），成功后重试原命令一次。
 
 ### 7.2 认证流程（详见 im-teams-auth 文档）
@@ -306,10 +330,17 @@ token 读取优先级：环境变量 `IM_TEAMS_GATEWAY_TOKEN_<ENV>` > Keyring。
 
 t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyring 读 token 注入请求头；长期 token 不经页面→receiver 传输，只在脚本侧 HTTPS 兑换。
 
-### 7.3 浏览器兜底链接
+### 7.3 认证链接（发给用户的形式）
 
-- 仅特定场景脚本才额外输出**可点击的 https/http 浏览器认证链接**（不带 scheme）。
-- 代理拿到该链接 → 必须提示「请点击下面链接在浏览器完成认证」，不能只留在日志/工具输出。
+`--start` 的 `pending` 输出含三种链接，发给用户的规则：
+
+| 字段 | 形式 | 是否发用户 | 用途 |
+|------|------|-----------|------|
+| `appLinkUrl` | `https://<im 或 sit-im>/applink/link?url=...`（https，域名按环境派生） | **是，必发** | 「在 Teams 中打开认证」，任何对话客户端都可点开并拉起 Teams |
+| `schemeUrl` | `teamssit://`/`sk360teams://applink/...` | **否** | 仅脚本内部 `webbrowser.open` 自动拉起；多数客户端点不开，不发用户 |
+| `landingUrl` | https 落地页（仅测试环境输出） | 输出包含时附加 | 「在浏览器中打开认证」，浏览器直开 |
+
+- 整个认证全程**只拉起一次、只发一次链接**：`--start` 已自动弹窗一次；窗口被关→用户点已发的同一条链接重开（`--start` 复用同会话同链接），代理不重复 `--start`、不反复发链接。
 - 默认视为**并行兜底提示**：若业务命令仍在执行，不得宣告「流程已暂停」。
 - 只有脚本已结束且明确返回需中断的结果（退出码 4 + 已输出面向用户链接）时，才暂停等待用户。
 
@@ -369,13 +400,16 @@ t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyr
 
 | 脚本 | status | 含义 | 下一步 |
 |------|--------|------|--------|
-| submit `--dry-run` | `dry_run` (create) | 新建待确认（写入第一步） | 展示内容/周期/抄送人/同组可见，问确认提交 |
-| submit `--dry-run` | `already_submitted` | 周期已填 | 问是否查/改最新 |
+| submit `--commit-confirmed` | `ok` (create/edit) | 新建成功；带 `--update-if-exists` 且本周已填可改时为就地更新(edit) | 展示周期/内容/抄送人/同组可见/预览链接 |
+| submit `--commit-confirmed` | `period_choice` | 存在多个可填写周期 | 列周期名给用户选，带 `--report-id` 重跑提交 |
+| submit `--commit-confirmed` | `already_submitted` | 周期已填（未带 `--update-if-exists`） | 按 canOperate 走冲突处理（对比/更新） |
+| submit `--validate-items` | `valid` / `error` | 纯本地格式校验结果（不联网） | valid→继续提交；error→按 message 重新生成 |
+| submit `--dry-run` | `dry_run` (create) | 新建待确认（仅开发排查） | 展示内容/周期/抄送人/同组可见，问确认提交 |
 | submit `--check` | `available`/`already_submitted` | 仅查周期（可选，非常规流程） | — |
 | edit `--list-recent` | `recent_list` | 最近 N 条（只读） | 展示列表后结束 |
-| edit `--query-latest` | `latest_detail` | 最新详情 | 按 canOperate 分支 |
+| edit `--query-latest` | `latest_detail` | 最新详情 | 按 canOperate 分支（false=最新周期未填，想写本周改走 submit） |
 | edit `--query-latest` | `not_found` | 无已填写 T5T | 结束 |
-| edit `--dry-run` | `dry_run` (edit) | 编辑待确认 | 展示并问是否提交 |
-| 任意 | `ok` | 提交成功 | 展示周期/内容/权限/同组可见/预览链接 |
-| 任意 | `expired` (退出码 4) | 认证失效 | `auth.py --start` 拉起认证并立即把 schemeUrl/landingUrl 链接发给用户，再 `auth.py --wait` 等结果（全任务最多一轮）；成功重试原命令一次，失败降级交付内容 |
-| 任意 | `error` | 业务错误 | 按 message/hint 处理；参数问题修正后重试一次，系统问题不重试，降级交付内容 |
+| edit `--commit-confirmed --latest`/`--id` | `ok` | 编辑提交成功 | 展示周期/内容/抄送人/同组可见/预览链接 |
+| edit `--dry-run` | `dry_run` (edit) | 编辑待确认（仅开发排查） | 展示并问是否提交 |
+| 任意 | `expired` (退出码 4) | 认证失效（含 401/403 与登录/账号类网关码，删 token 重认证） | `auth.py --start --no-cache` 拉起认证，把 **appLinkUrl**（https 可点）发给用户一次，`schemeUrl` 不发用户；再 `auth.py --wait`（全任务最多一轮）；成功重试原命令一次，失败降级交付内容 |
+| 任意 | `error` (退出码 1) | 业务/系统错误，不重试 | 按 message 分类告诉用户：网络问题→提示网络；服务暂时不可用→系统问题；格式错→本地重新生成再提交(≤3 次)；均降级交付内容 |

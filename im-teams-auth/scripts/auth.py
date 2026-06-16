@@ -167,6 +167,12 @@ def _build_scheme_url(environment: str, landing_url: str) -> str:
     return f"{scheme_prefix}applink/link?url={quote(landing_url, safe='')}"
 
 
+def _build_applink_url(landing_url: str) -> str:
+    """可点的 Teams 认证链接：用 https 的 applink 协议（任何客户端都可点），
+    域名从落地页派生（生产 im / 测试 sit-im），url 参数为认证落地页。"""
+    return f"{_same_origin(landing_url)}/applink/link?url={quote(landing_url, safe='')}"
+
+
 def _open_browser(url: str) -> bool:
     try:
         return bool(webbrowser.open(url))
@@ -389,13 +395,15 @@ def _print_pending_links(environment: str, session: dict) -> None:
         "status": "pending",
         "authenticated": False,
         "message": "认证已拉起，等待用户完成授权",
+        "appLinkUrl": _build_applink_url(landing_url),
         "schemeUrl": _build_scheme_url(environment, landing_url),
         "requestExpiresAt": session["requestExpiresAt"],
         "remainingSeconds": max(1, _remaining_seconds(session["requestExpiresAt"])),
         "sessionId": session["sessionId"],
         "environment": environment,
         "hint": (
-            "立即把认证链接以可点击形式发给用户：schemeUrl（在 Teams 中打开认证），"
+            "立即把认证链接以可点击形式发给用户：用 appLinkUrl 作「在 Teams 中打开认证」"
+            "（https 链接，任何客户端都可点；schemeUrl 是 teamssit://协议链接，多数客户端点不开，仅作内部自动拉起，不要发给用户）。"
             "输出包含 landingUrl 时再附一条（在浏览器中打开认证）。"
             "并说明：认证窗口没有弹出、或不小心被关掉时，点链接即可重新打开，"
             "完成授权后会自动继续。发出链接后再运行 auth.py --wait 等待认证结果。"

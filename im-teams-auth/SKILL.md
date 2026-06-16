@@ -51,11 +51,11 @@ python3 scripts/env_check.py
 登录认证（代理标准用法，两段式，不阻塞用户）：
 
 ```bash
-python3 scripts/auth.py --start   # 后台拉起认证，立即返回 schemeUrl + landingUrl 两个链接
+python3 scripts/auth.py --start   # 后台拉起认证，立即返回 appLinkUrl（发给用户）等链接
 python3 scripts/auth.py --wait    # 把链接发给用户后再执行，等待认证完成
 ```
 
-`--start` 秒级返回：`status: ok` 表示已有有效 token；`status: pending` 表示已拉起认证，输出里带 `schemeUrl`（Teams 内打开，必有）、`hint`，以及部分场景下的 `landingUrl`（浏览器打开，脚本按场景决定是否提供）。重复执行 `--start` 会复用同一个认证会话和链接（窗口被关掉时再跑一次拿同一链接即可）。
+`--start` 秒级返回：`status: ok` 表示已有有效 token；`status: pending` 表示已拉起认证，输出里带 `appLinkUrl`（**发给用户的可点 Teams 链接**，https，任何客户端可点，必有）、`schemeUrl`（teamssit:// 协议链接，仅脚本内部自动拉起用，**不发给用户**）、`hint`，以及部分场景下的 `landingUrl`（浏览器打开，脚本按场景决定是否提供）。重复执行 `--start` 会复用同一个认证会话和链接（窗口被关掉时再跑一次拿同一链接即可）。
 
 登录认证（单命令阻塞式，适合用户自己在终端跑）：
 
@@ -170,13 +170,15 @@ IM_TEAMS_GATEWAY_TOKEN_TEST
 
 1. **第一步 `auth.py --start --no-cache`**（秒级返回，receiver 由后台子进程持有；当前在受限沙箱时应申请非沙箱执行，receiver 需要监听本机 `127.0.0.1:35101-35110`）。**业务命令退出码 4 触发的补救必须带 `--no-cache`**：服务端可能已把 token 作废而本地仍在 3 天有效期内，不清缓存 `--start` 会被「本地有效」短路返回 `ok`，重试业务后再次 401，坏 token 永远不被刷新。不带 `--no-cache` 的 `--start` 仅用于主动预检场景：
    - `status: ok`（仅不带 `--no-cache` 时可能出现）：已有有效 token，直接重试原业务命令。
-   - `status: pending`：**立即把输出里的认证链接以可点击形式发给用户**，再进入第二步。`schemeUrl` 必发；浏览器链接只在输出**包含 `landingUrl` 字段**时附加（脚本按场景决定是否提供，没有就不提浏览器）。话术示例：
+   - `status: pending`：**立即把输出里的认证链接以可点击形式发给用户**，再进入第二步。用 `appLinkUrl` 作「在 Teams 中打开认证」（https，任何客户端可点）必发；浏览器链接只在输出**包含 `landingUrl` 字段**时附加（脚本按场景决定是否提供，没有就不提浏览器）。**`schemeUrl`（teamssit:// 协议链接）多数客户端点不开，仅供脚本内部自动拉起，不要发给用户。** **整个认证全程只拉起一次、只发一次链接**：`--start` 已自动弹出一次认证窗口并返回链接，把链接发给用户一次即可，**不要重复 `--start`、不要多次触发打开、不要反复发同一条链接**；窗口被关→让用户点已发的同一条链接重开（`--start` 复用同一会话同一链接），无需再拉起。话术示例：
 
      > 需要先完成一次认证，我已尝试拉起 Teams 认证窗口。如果窗口没有弹出、或者不小心被关掉了，点下面的链接重新打开：
-     > - [在 Teams 中打开认证](schemeUrl)
+     > - [在 Teams 中打开认证](appLinkUrl)
      > - [在浏览器中打开认证](landingUrl) ←仅当输出包含 landingUrl 时附加
      >
      > 完成授权后我会自动继续。
+     >
+     > 说明：可点的 Teams 链接用 `appLinkUrl`（`https://<im 或 sit-im 域名>/applink/link?url=...`，任何客户端都可点开并拉起 Teams）。**不要发 `schemeUrl`（`teamssit://`/`sk360teams://`）给用户**——协议链接多数客户端点不开，仅脚本内部自动拉起用。`landingUrl`（http，仅测试环境）浏览器直开正常可点。
    - `status: error`（退出码 `1`）：端口不可用或环境受限，不重试，交还业务 skill 走降级流程并提示用户稍后再试。
 2. **第二步 `auth.py --wait`**（发完链接后执行，阻塞至认证完成或会话超时，默认最长 120 秒）：
    - `0`：认证成功，重试原业务命令一次。
