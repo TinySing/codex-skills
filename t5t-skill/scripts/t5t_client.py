@@ -737,7 +737,8 @@ def print_error(error: Exception, environment: str) -> int:
                 "status": "error",
                 "message": str(error),
                 "hint": (
-                    "这是网络连接问题。不要重试、不要连环调用其他接口排查；"
+                    "这是网络连接问题。脚本已正常运行并返回此结果，"
+                    "解释器没问题——不要换 python/py 重试、不要探测 Python 环境、不要列目录、不要连环调用其他接口排查；"
                     "明确告诉用户是网络连接失败、请检查网络后稍后再试，"
                     "并把已生成的 T5T 内容交给用户。"
                 ),
@@ -751,7 +752,8 @@ def print_error(error: Exception, environment: str) -> int:
             "status": "error",
             "message": str(error),
             "hint": (
-                "这是服务端/系统问题。不要重试、不要连环调用其他接口排查；"
+                "这是服务端/系统问题。脚本已正常运行并返回此结果，"
+                "解释器没问题——不要换 python/py 重试、不要探测 Python 环境、不要列目录、不要连环调用其他接口排查；"
                 "告诉用户系统暂时不可用、稍后再试，不要暴露 code 或接口细节，"
                 "并把已生成的 T5T 内容交给用户。"
             ),
