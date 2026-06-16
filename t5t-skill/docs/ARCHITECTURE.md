@@ -57,8 +57,10 @@
 | test 域名 | `https://sit-im.360teams.com` |
 | API 前缀 | `/api/qfin-api` |
 | Appkey | `t5t`（固定） |
-| 超时 | 30s |
+| 业务接口请求超时 | 30s（`DEFAULT_REQUEST_TIMEOUT`，每次 HTTP 请求的超时，可用 `--timeout` 覆盖） |
 | 认证失效退出码 | `4` |
+
+> 这里的 30s 只是 t5t **业务接口单次 HTTP 请求**的超时，与「认证等待」无关。认证的等待超时（本地 receiver 等用户完成授权回传 token，默认 **120s**）由 `im-teams-auth` 控制，见其 `RECEIVER_TIMEOUT_SECONDS`；t5t 自身不发起认证、不持有该超时。
 
 接口路径：
 

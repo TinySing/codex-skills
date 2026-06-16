@@ -8,8 +8,8 @@
 |------|----------|----------|
 | 环境检测 | 检查 Python 版本、运行平台和 `keyring` 可用性 | Python 需要 `>=3.9` |
 | 认证状态检查 | 检查环境变量或 OS Keyring 中是否存在有效 token | 不向调用方暴露完整 token |
-| 拉起 Teams 认证 | 通过 Teams scheme 打开项目域名认证页 | 认证页必须从 Teams 已登录态生成短期凭证 |
-| 浏览器兜底 | 在特定场景输出可点击的认证页链接 | 链接是并行兜底，不代表流程必然暂停 |
+| 拉起 Teams 认证 | 通过 Teams scheme 自动打开项目域名认证页（仅一次） | 认证页必须从 Teams 已登录态生成短期凭证 |
+| 输出认证链接 | 输出可点的 Teams 认证链接 `appLinkUrl`（https，任何客户端可点，所有环境必有）供用户手动打开；测试环境额外给浏览器落地页 `landingUrl` | `schemeUrl`（协议链接）仅脚本内部自动拉起，多数客户端点不开，不发用户；链接是并行兜底，不代表流程必然暂停 |
 | 本地凭证接收 | 启动一次性回环 HTTP receiver 接收短期认证凭证 | 只监听 `127.0.0.1`，固定端口范围和路径 |
 | 会话复用 | 同一待完成认证期间复用同一个 landing URL 和 receiver | 仅当旧会话过期或 receiver 失活时才新建会话 |
 | Token 兑换 | 通过 HTTPS 将短期认证凭证兑换为公网 IM token | 长期 token 不经过认证页回传给 receiver |
@@ -32,7 +32,7 @@
 1. 检查已有认证状态。
 2. 未认证时启动一次性本地 receiver。
 3. 生成带 `state`、`receiver`、`request_expires_at`、`session_id` 和 `win_id` 的项目认证页 URL。
-4. 通过 Teams scheme 打开认证页，并按规则提供浏览器兜底链接。
+4. 通过 Teams scheme 自动打开认证页（仅一次），并输出可点的 `appLinkUrl` 供用户手动打开；测试环境额外附浏览器落地页 `landingUrl`。
 5. 认证页回传短期认证凭证。
 6. receiver 校验请求并通过 HTTPS 兑换 token。
 7. token 写入 OS Keyring，receiver 立即退出。
@@ -57,7 +57,7 @@
 - 监听公网地址或任意本地端口。
 - 由业务 skill 复制、修改或扩展认证策略。
 - 自动移除调用进程外部设置的环境变量 token。
-- 将浏览器兜底链接一律解释为认证流程已经暂停。
+- 将认证兜底链接一律解释为认证流程已经暂停。
 
 ## 常见使用方式
 

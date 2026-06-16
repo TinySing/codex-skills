@@ -29,6 +29,7 @@ ACTIVE_ENVIRONMENT = "test"
 TOKEN_MAX_AGE_SECONDS = 3 * 24 * 3600
 RECEIVER_HOST = "127.0.0.1"
 RECEIVER_PORTS = list(range(35101, 35111))
+# 认证等待超时（秒）：receiver 等用户完成授权回传 token 的最长时间，即 --wait 最长阻塞时长。
 RECEIVER_TIMEOUT_SECONDS = 120
 
 LANDING_URLS = {
