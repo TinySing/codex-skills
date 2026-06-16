@@ -2,6 +2,9 @@
 rem Windows 包装脚本：调用环境检测或认证脚本，并透传后续参数。
 setlocal enabledelayedexpansion
 
+rem 强制子进程 UTF-8 stdout，避免中文/emoji 输出经管道时按 ANSI 代码页编码报错。
+set "PYTHONUTF8=1"
+
 set "SCRIPT_DIR=%~dp0"
 set "PYTHON_CMD="
 

@@ -44,7 +44,7 @@ from credential_store import (
     normalize_environment,
 )
 from errors import AuthError
-from runtime import ensure_keyring, setup_logging
+from runtime import ensure_keyring, force_utf8_io, setup_logging
 from session_store import (
     SESSION_POLL_INTERVAL_SECONDS,
     build_pending_session as _build_pending_session,
@@ -180,43 +180,39 @@ def _open_browser(url: str) -> bool:
         return False
 
 
-def _get_browser_fallback_message(environment: str, landing_url: str,
-                                  timeout_seconds: int, reused_session: bool = False) -> str | None:
+def _get_browser_fallback_message(environment: str, landing_url: str) -> str | None:
+    """测试环境的浏览器兜底入口文案，与 stderr/主入口口径一致、与会话状态无关。
+
+    生产落地页依赖 Teams 容器，不提供浏览器入口（返回 None）。
+    """
     if environment != "test":
         return None
-    if reused_session:
-        return (
-            f"检测到已有待完成认证；请继续使用之前打开的认证窗口，或在剩余 {timeout_seconds} 秒内"
-            f"[点击这里]({landing_url})继续认证。"
+    return f"（测试环境）也可在浏览器中完成认证：{landing_url}"
+
+
+def _print_auth_fallback(environment: str, applink_url: str, landing_url: str) -> None:
+    """拉起 scheme 的同时，给用户兜底认证入口（stderr）。
+
+    措辞与会话状态无关：scheme 没拉起、或认证失败时，点链接即可重新认证。
+    appLinkUrl（https，任何客户端可点）对所有环境可用，是统一入口；
+    测试环境再额外给一条浏览器直开入口（landingUrl，生产落地页依赖 Teams 容器不提供）。
+    """
+    print(
+        f"认证如果失败，请点此重新认证（在 Teams 中打开）：{applink_url}",
+        file=sys.stderr,
+        flush=True,
+    )
+    if environment == "test":
+        print(
+            f"（测试环境）也可在浏览器中完成认证：{landing_url}",
+            file=sys.stderr,
+            flush=True,
         )
-    return (
-        f"正在打开 Teams 认证；如果没有自动拉起，请在 {timeout_seconds} 秒内"
-        f"[点击这里]({landing_url})继续认证。"
-    )
 
 
-def _print_browser_fallback(environment: str, landing_url: str, timeout_seconds: int,
-                            reused_session: bool = False) -> None:
-    message = _get_browser_fallback_message(
-        environment,
-        landing_url,
-        timeout_seconds,
-        reused_session=reused_session,
-    )
-    if not message:
-        return
-    print(message, file=sys.stderr, flush=True)
-
-
-def _build_browser_fallback_payload(environment: str, landing_url: str, timeout_seconds: int,
-                                    request_expires_at: str,
-                                    reused_session: bool = False) -> dict[str, str]:
-    message = _get_browser_fallback_message(
-        environment,
-        landing_url,
-        timeout_seconds,
-        reused_session=reused_session,
-    )
+def _build_browser_fallback_payload(environment: str, landing_url: str,
+                                    request_expires_at: str) -> dict[str, str]:
+    message = _get_browser_fallback_message(environment, landing_url)
     if not message:
         return {}
     return {
@@ -445,11 +441,25 @@ def _handle_start(args: argparse.Namespace) -> int:
             command.append("--open-url-directly")
         if args.port:
             command += ["--port", str(args.port)]
+        # 让后台 receiver 脱离父进程：POSIX 用 setsid；Windows 上
+        # start_new_session 会被忽略，需用 creationflags 真正脱离控制台与进程组，
+        # 否则父进程退出（或被按进程树回收）时后台认证服务会被一起杀掉。
+        if os.name == "nt":
+            # DETACHED_PROCESS 已表示无控制台窗口，不能再叠 CREATE_NO_WINDOW
+            # （两者在 CreateProcess 里互斥，同时传会 ERROR_INVALID_PARAMETER）。
+            detach_kwargs = {
+                "creationflags": (
+                    getattr(subprocess, "DETACHED_PROCESS", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                )
+            }
+        else:
+            detach_kwargs = {"start_new_session": True}
         subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
+            **detach_kwargs,
         )
         deadline = time.time() + 10
         session = None
@@ -478,7 +488,7 @@ def _handle_wait(args: argparse.Namespace) -> int:
             "status": "ok",
             "authenticated": True,
             "expires_at": expiry,
-            "message": "Login successful, gateway token cached.",
+            "message": "认证成功，凭证已缓存。",
             "environment": args.env,
         })
         return 0
@@ -495,7 +505,7 @@ def _handle_wait(args: argparse.Namespace) -> int:
     if result.get("status") == "ok":
         _json_print({
             **result,
-            "message": "Login successful, gateway token cached.",
+            "message": "认证成功，凭证已缓存。",
             "environment": args.env,
         })
         return 0
@@ -530,6 +540,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    force_utf8_io()
     args = _parse_args(argv)
     args.env = normalize_environment(args.env)
     setup_logging(args.verbose)
@@ -617,7 +628,7 @@ def main(argv: list[str] | None = None) -> int:
         if token:
             _json_print({
                 "status": "ok",
-                "message": "Already authenticated (using cached token).",
+                "message": "已认证（使用缓存凭证）。",
                 "authenticated": True,
                 "expires_at": expiry,
                 "source": source,
@@ -637,21 +648,18 @@ def main(argv: list[str] | None = None) -> int:
         request_expires_at = session["requestExpiresAt"]
         receiver_url = session["receiver"]
         session_id = session["sessionId"]
-        remaining_seconds = max(1, _remaining_seconds(request_expires_at))
         login_url = landing_url if args.open_url_directly else _build_scheme_url(args.env, landing_url)
+        # 可点的 Teams 认证链接（https，任何客户端可点）。scheme 自动拉起在
+        # Windows 等环境可能失败，始终输出 appLinkUrl 作为兜底，让用户能手动点开。
+        applink_url = _build_applink_url(landing_url)
         opened = False
         if created_session:
-            _print_browser_fallback(args.env, landing_url, args.timeout)
+            _print_auth_fallback(args.env, applink_url, landing_url)
             opened = _open_browser(login_url)
             logger.info("Landing page opened=%s receiver=%s session=%s", opened, receiver_url, session_id)
             result = _wait_for_token(server, args.timeout)
         else:
-            _print_browser_fallback(
-                args.env,
-                landing_url,
-                remaining_seconds,
-                reused_session=True,
-            )
+            _print_auth_fallback(args.env, applink_url, landing_url)
             logger.info("Reusing pending auth session receiver=%s session=%s", receiver_url, session_id)
             result = _wait_for_existing_session(args.env, session)
 
@@ -662,11 +670,12 @@ def main(argv: list[str] | None = None) -> int:
             _remove_pending_session(args.env)
             _json_print({
                 **result,
-                "message": "Login successful, gateway token cached.",
+                "message": "认证成功，凭证已缓存。",
                 "environment": args.env,
                 "receiver": receiver_url,
                 "sessionId": session_id,
                 "winId": session["winId"],
+                "appLinkUrl": applink_url,
                 "landingUrl": landing_url,
                 "requestExpiresAt": request_expires_at,
                 "landingUrlOpened": opened,
@@ -680,13 +689,12 @@ def main(argv: list[str] | None = None) -> int:
                 "receiver": receiver_url,
                 "sessionId": session_id,
                 "winId": session["winId"],
+                "appLinkUrl": applink_url,
                 "requestExpiresAt": request_expires_at,
                 **_build_browser_fallback_payload(
                     args.env,
                     landing_url,
-                    remaining_seconds,
                     request_expires_at,
-                    reused_session=not created_session,
                 ),
                 "reusedSession": not created_session,
             }

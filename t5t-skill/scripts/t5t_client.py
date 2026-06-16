@@ -76,6 +76,23 @@ def _load_gateway_errors():
 gateway_errors = _load_gateway_errors()
 
 
+def force_utf8_io() -> None:
+    """强制 stdout/stderr 用 UTF-8。
+
+    Windows 上 stdout 被重定向到管道时默认用 ANSI 代码页（如 cp936），
+    打印含 emoji 等非 GBK 字符的中文 JSON 会抛 UnicodeEncodeError。
+    入口脚本在任何输出前调用，保证跨平台一致。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (ValueError, OSError):
+            pass
+
+
 def json_print(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -687,8 +704,9 @@ def print_error(error: Exception, environment: str) -> int:
                 "hint": (
                     "两段式认证：先运行 im-teams-auth/scripts/auth.py --start --no-cache"
                     "（秒级返回；必须带 --no-cache，本地缓存的 token 可能已被服务端判定失效），"
-                    "把返回的 schemeUrl（及输出包含时的 landingUrl）以可点击链接立即发给用户"
-                    "（窗口没弹出或被关掉时点链接可重新打开），再运行 auth.py --wait 等待结果。"
+                    "把返回的 appLinkUrl（在 Teams 中打开认证，https，任何客户端都可点）以可点击链接"
+                    "立即发给用户（输出包含 landingUrl 时再附浏览器一条；窗口没弹出或被关掉时点链接可重新打开）；"
+                    "不要发 schemeUrl（teamssit://，多数客户端点不开）。再运行 auth.py --wait 等待结果。"
                     "认证成功后重试原命令一次；认证失败或重试仍失败时，停止调用接口，"
                     "把已生成的 T5T 内容直接交给用户并说明需手动提交。本次任务最多一轮认证。"
                 ),

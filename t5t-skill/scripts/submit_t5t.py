@@ -86,6 +86,7 @@ def print_already_submitted(
 
 
 def main(argv: list[str] | None = None) -> int:
+    t5t.force_utf8_io()
     args = parse_args(argv)
     try:
         # 纯本地格式校验：不联网、不认证。模型生成内容后先用它自检，

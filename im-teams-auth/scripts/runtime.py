@@ -13,6 +13,23 @@ from logging.handlers import RotatingFileHandler
 from config import LOG_BACKUP_COUNT, LOG_FILE, LOG_MAX_BYTES
 
 
+def force_utf8_io() -> None:
+    """强制 stdout/stderr 用 UTF-8。
+
+    Windows 上 stdout 被重定向到管道时默认用 ANSI 代码页（如 cp936），
+    打印含 emoji 等非 GBK 字符的中文 JSON 会抛 UnicodeEncodeError。
+    调用方在任何输出前调用，保证跨平台一致。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (ValueError, OSError):
+            pass
+
+
 def setup_logging(verbose: bool = False) -> None:
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if verbose else logging.INFO)

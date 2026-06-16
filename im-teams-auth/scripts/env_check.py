@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -37,7 +38,7 @@ MIN_PYTHON_VERSION: Tuple[int, int] = (3, 9)
 
 # Cache file path (skill-local, non-credential)
 from config import CACHE_DIR
-from runtime import ensure_keyring
+from runtime import ensure_keyring, force_utf8_io
 CACHE_TXT: Path = CACHE_DIR / "python_path.txt"
 CACHE_MAX_AGE_SECONDS: int = 7 * 24 * 3600
 
@@ -194,9 +195,11 @@ def _discover_windows() -> Optional[Tuple[str, str]]:
                 if not line:
                     continue
                 # Output format: " -V:3.13 *    C:\Users\...\python.exe"
-                parts = line.split()
-                if parts:
-                    candidate = parts[-1]
+                # 路径可能含空格（如 C:\Program Files\...），不能用 split()[-1]，
+                # 从第一个盘符开始取整段路径。
+                match = re.search(r"[A-Za-z]:\\.*", line)
+                candidate = match.group(0).strip() if match else line.split()[-1]
+                if candidate:
                     validated = _try_candidate(candidate)
                     if validated:
                         return validated
@@ -462,6 +465,7 @@ def find_python_with_info() -> dict:
 
 def main() -> None:
     """CLI entry point - output detection result as JSON."""
+    force_utf8_io()
     info = find_python_with_info()
 
     # Check and auto-install keyring
