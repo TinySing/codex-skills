@@ -62,6 +62,7 @@ from session_store import (
 )
 
 AUTH_EXPIRED_EXIT_CODE = 4
+AUTH_PENDING_EXIT_CODE = 3
 MAX_REQUEST_BODY_BYTES = 16 * 1024
 
 
@@ -69,13 +70,17 @@ def _json_print(payload: dict) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def _wait_for_existing_session(environment: str, session: dict) -> dict:
+def _wait_for_existing_session(environment: str, session: dict,
+                               poll_timeout: float | None = None) -> dict:
     deadline = _parse_iso_timestamp(session.get("requestExpiresAt"))
     if deadline is None:
         return {"status": "expired", "authenticated": False, "message": "认证会话已失效，请重新发起认证"}
 
     session_id = session["sessionId"]
-    while time.time() < deadline:
+    # poll_timeout 不传：阻塞到会话剩余全部时长（旧行为，供后台 receiver 进程自用）。
+    # 传了：本次只探这么久，会话还没到期就返回 pending，调用方可再调一次 --wait 继续等。
+    poll_deadline = deadline if poll_timeout is None else min(deadline, time.time() + poll_timeout)
+    while time.time() < poll_deadline:
         token, expiry, _source = _load_cached_token(environment)
         if token:
             return {
@@ -105,6 +110,13 @@ def _wait_for_existing_session(environment: str, session: dict) -> dict:
 
         time.sleep(SESSION_POLL_INTERVAL_SECONDS)
 
+    if time.time() < deadline:
+        return {
+            "status": "pending",
+            "authenticated": False,
+            "message": "认证尚未完成，会话仍有效，可再次调用 --wait 继续等待",
+            "remainingSeconds": max(0, int(deadline - time.time())),
+        }
     return {"status": "expired", "authenticated": False, "message": "等待现有认证会话完成超时"}
 
 
@@ -399,11 +411,12 @@ def _print_pending_links(environment: str, session: dict) -> None:
         "sessionId": session["sessionId"],
         "environment": environment,
         "hint": (
-            "立即把认证链接以可点击形式发给用户：用 appLinkUrl 作「在 Teams 中打开认证」"
+            "下一步必须是把认证链接以可点击形式发给用户作为一条消息，禁止在发这条消息之前调用 --wait 或任何其它命令。"
+            "用 appLinkUrl 作「在 Teams 中打开认证」"
             "（https 链接，任何客户端都可点；schemeUrl 是 teamssit://协议链接，多数客户端点不开，仅作内部自动拉起，不要发给用户）。"
             "输出包含 landingUrl 时再附一条（在浏览器中打开认证）。"
             "并说明：认证窗口没有弹出、或不小心被关掉时，点链接即可重新打开，"
-            "完成授权后会自动继续。发出链接后再运行 auth.py --wait 等待认证结果。"
+            "完成授权后会自动继续。把链接发给用户之后，再运行 auth.py --wait 等待认证结果。"
         ),
     }
     # 浏览器落地页兜底仅测试环境可用；生产落地页依赖 Teams 容器，不给浏览器链接
@@ -507,7 +520,7 @@ def _handle_wait(args: argparse.Namespace) -> int:
             "environment": args.env,
         })
         return AUTH_EXPIRED_EXIT_CODE
-    result = _wait_for_existing_session(args.env, session)
+    result = _wait_for_existing_session(args.env, session, poll_timeout=args.poll_timeout)
     if result.get("status") == "ok":
         _json_print({
             **result,
@@ -516,6 +529,8 @@ def _handle_wait(args: argparse.Namespace) -> int:
         })
         return 0
     _json_print({**result, "environment": args.env})
+    if result.get("status") == "pending":
+        return AUTH_PENDING_EXIT_CODE
     return AUTH_EXPIRED_EXIT_CODE if result.get("status") == "expired" else 1
 
 
@@ -528,6 +543,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="后台拉起认证并立即返回认证链接（之后用 --wait 等待结果）",
     )
     parser.add_argument("--wait", action="store_true", help="等待已拉起的认证完成")
+    parser.add_argument(
+        "--poll-timeout",
+        type=int,
+        default=None,
+        help="仅配合 --wait：本次轮询最长秒数，超时且会话未过期返回 status=pending（可再调一次 --wait 继续等）；不传则阻塞到会话剩余全部时长",
+    )
     parser.add_argument("--no-cache", action="store_true", help="忽略并清理本地缓存，强制重新认证")
     parser.add_argument("--clear", action="store_true", help="清除当前环境的 token")
     parser.add_argument("--clear-all", action="store_true", help="清除所有环境的 token")
