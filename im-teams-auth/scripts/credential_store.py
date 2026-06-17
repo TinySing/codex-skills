@@ -7,16 +7,12 @@ IM Teams 凭证存储。
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-
 from config import (
     ACTIVE_ENVIRONMENT,
     ENV_TOKEN_NAME,
     KEYRING_GATEWAY_TOKEN,
     KEYRING_SERVICE,
-    KEYRING_TOKEN_EXPIRY,
     LANDING_URLS,
-    TOKEN_MAX_AGE_SECONDS,
 )
 from errors import AuthError
 
@@ -51,47 +47,29 @@ def _require_keyring() -> None:
         raise AuthError("OS Keyring 不可用，无法安全存储凭证。")
 
 
-def _normalize_expiry(expires_at: str | None = None,
-                      max_age_seconds: int = TOKEN_MAX_AGE_SECONDS) -> str:
-    if expires_at:
-        try:
-            parsed = datetime.fromisoformat(expires_at)
-            if parsed > datetime.now():
-                return parsed.isoformat()
-        except (TypeError, ValueError):
-            pass
-    return (datetime.now() + timedelta(seconds=max_age_seconds)).isoformat()
-
-
-def keyring_save_token(token: str, environment: str, expires_at: str | None = None) -> str:
+def keyring_save_token(token: str, environment: str) -> None:
+    """只存 token，不记本地过期时间。token 是否失效以服务端为准（网关认证码 → 重认证）。"""
     _require_keyring()
     if not token:
         raise AuthError("Token 为空，无法写入 Keyring。")
     service = keyring_service_for(environment)
-    expiry = _normalize_expiry(expires_at)
     try:
         import keyring
         keyring.set_password(service, KEYRING_GATEWAY_TOKEN, token)
-        keyring.set_password(service, KEYRING_TOKEN_EXPIRY, expiry)
-        return expiry
     except Exception as exc:
         raise AuthError(f"Keyring 写入失败: {exc}") from exc
 
 
 def keyring_load_token(environment: str) -> tuple[str | None, str | None]:
+    """有 token 就返回；不做本地过期判断（失效由服务端 401/认证码触发重认证）。
+
+    返回 (token, None)：第二位过期时间恒为 None，保留二元组形状以兼容调用方。
+    """
     service = keyring_service_for(environment)
     try:
         import keyring
-        expiry = keyring.get_password(service, KEYRING_TOKEN_EXPIRY)
-        if not expiry:
-            return None, None
-        try:
-            if datetime.now() >= datetime.fromisoformat(expiry):
-                return None, expiry
-        except (TypeError, ValueError):
-            return None, None
         token = keyring.get_password(service, KEYRING_GATEWAY_TOKEN)
-        return token, expiry
+        return (token or None), None
     except Exception:
         return None, None
 
@@ -100,14 +78,11 @@ def keyring_clear_token(environment: str) -> bool:
     """删除指定环境的钥匙串 token；返回是否真的删到了内容（本来为空返回 False）。"""
     service = keyring_service_for(environment)
     import keyring
-    removed = False
-    for key in (KEYRING_GATEWAY_TOKEN, KEYRING_TOKEN_EXPIRY):
-        try:
-            keyring.delete_password(service, key)
-            removed = True
-        except keyring.errors.PasswordDeleteError:
-            pass
-    return removed
+    try:
+        keyring.delete_password(service, KEYRING_GATEWAY_TOKEN)
+        return True
+    except keyring.errors.PasswordDeleteError:
+        return False
 
 
 def keyring_clear_all_tokens() -> dict:

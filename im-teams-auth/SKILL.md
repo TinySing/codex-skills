@@ -132,15 +132,14 @@ sk360teams://applink/link?url=<encoded landing url>
 
 ## Storage
 
-凭证只存 OS Keyring，不写明文文件。Token 默认过期时间为 7 天。
+凭证只存 OS Keyring，不写明文文件。**只存 token，不记本地过期时间**——token 是否失效以服务端为准：业务接口返回**认证类网关码**（`gateway_errors.is_auth_code` 那一组：401/403、100401/100403，以及登录过期 10230/10301、身份失败 10220/10241、验证码 10130、账号停用 12001/12003/12004 等业务码）任意一个，都删 token 重认证。有 token 就用，能用多久用多久。
 
 认证进行中会在 `cache/pending_session_<env>.json` 记录待完成会话（`state`、`receiver`、`landingUrl`、超时等元数据，**不含 token**），供并发触发时复用同一窗口；认证成功后删除，残留也会在下次运行按状态/时效清理。配套 `cache/pending_session_<env>.lock` 为短时互斥锁，进程异常退出残留时超过 30 秒会被自动抢占。
 
 Keyring 位置：
 
 - service: `im-teams-auth:production` 或 `im-teams-auth:test`
-- token key: `gateway_token`
-- expiry key: `gateway_token_expiry`
+- token key: `gateway_token`（不记本地过期时间）
 
 其他技能读取方式：
 
@@ -177,14 +176,14 @@ IM_TEAMS_GATEWAY_TOKEN_TEST
    - 如果当前环境已经存在未超时的待完成认证会话，脚本必须复用已有链接，只提示用户继续使用同一个窗口或链接，不得再生成新的认证链接。
 8. Teams 客户端在窗口中打开认证页，页面从 Teams 已登录态生成短期认证凭证。
 9. 用户确认授权后，认证页 POST 短期认证凭证到 receiver。
-10. receiver 校验 `state`、`Origin` 和 `request_expires_at` 对应的会话时效，通过 HTTPS 兑换 token，写入 Keyring 和过期时间。
+10. receiver 校验 `state`、`Origin` 和 `request_expires_at` 对应的会话时效，通过 HTTPS 兑换 token，写入 Keyring（只存 token，不记本地过期）。
 11. 认证成功后重试原操作一次；仍失败时不再认证，由业务 skill 走自己的降级流程。
 
 ## 调用方分支协议（两段式，不让用户干等）
 
 业务 skill 的脚本不会在内部自动拉起交互式认证：遇到未认证或认证失效会以退出码 `4` 快速返回，由代理显式调用本 skill。代理处理规则：
 
-1. **第一步 `auth.py --start --no-cache`**（秒级返回，receiver 由后台子进程持有；当前在受限沙箱时应申请非沙箱执行，receiver 需要监听本机 `127.0.0.1:35101-35110`）。**业务命令退出码 4 触发的补救必须带 `--no-cache`**：服务端可能已把 token 作废而本地仍在 7 天有效期内，不清缓存 `--start` 会被「本地有效」短路返回 `ok`，重试业务后再次 401，坏 token 永远不被刷新。不带 `--no-cache` 的 `--start` 仅用于主动预检场景：
+1. **第一步 `auth.py --start --no-cache`**（秒级返回，receiver 由后台子进程持有；当前在受限沙箱时应申请非沙箱执行，receiver 需要监听本机 `127.0.0.1:35101-35110`）。**业务命令退出码 4 触发的补救必须带 `--no-cache`**：本地不再判过期，只要 Keyring 里有 token，`--start` 就会「本地有效」短路返回 `ok`；而服务端可能已把这条 token 作废。不清缓存就重试业务会再次 401，坏 token 永远不被刷新。`--no-cache` 先删本地 token 再重认证。不带 `--no-cache` 的 `--start` 仅用于主动预检场景：
    - `status: ok`（仅不带 `--no-cache` 时可能出现）：已有有效 token，直接重试原业务命令。
    - `status: pending`：**立即把输出里的认证链接以可点击形式发给用户**，再进入第二步。用 `appLinkUrl` 作「在 Teams 中打开认证」（https，任何客户端可点）必发；浏览器链接只在输出**包含 `landingUrl` 字段**时附加（脚本按场景决定是否提供，没有就不提浏览器）。**`schemeUrl`（teamssit:// 协议链接）多数客户端点不开，仅供脚本内部自动拉起，不要发给用户。** **整个认证全程只拉起一次、只发一次链接**：`--start` 已自动弹出一次认证窗口并返回链接，把链接发给用户一次即可，**不要重复 `--start`、不要多次触发打开、不要反复发同一条链接**；窗口被关→让用户点已发的同一条链接重开（`--start` 复用同一会话同一链接），无需再拉起。话术示例：
 
@@ -238,7 +237,7 @@ IM_TEAMS_GATEWAY_TOKEN_TEST
 
 认证页必须从框架已登录态中生成短期认证凭证，不读取、展示或打印长期 token。
 
-POST 到 receiver 的 JSON（只回传 `state` 和 `encrypt`；token 过期时间由脚本侧默认 7 天，页面不回传 `expiresAt`，脚本仍兼容传入但页面不再发送）：
+POST 到 receiver 的 JSON（只回传 `state` 和 `encrypt`；脚本不记本地过期时间，token 失效以服务端为准）：
 
 ```json
 {

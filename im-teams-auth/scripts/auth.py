@@ -295,7 +295,6 @@ class _TokenReceiver(BaseHTTPRequestHandler):
 
         state = payload.get("state")
         encrypt = payload.get("encrypt")
-        expires_at = payload.get("expiresAt") or payload.get("expires_at")
         if state != self.server.expected_state:
             self._send_json(403, {"code": 403, "message": "state 校验失败"})
             return
@@ -305,7 +304,7 @@ class _TokenReceiver(BaseHTTPRequestHandler):
 
         try:
             token = _exchange_short_key(encrypt, self.server.environment)
-            expiry = keyring_save_token(token, self.server.environment, expires_at=expires_at)
+            keyring_save_token(token, self.server.environment)
         except AuthError as exc:
             self.server.result = {"status": "error", "message": str(exc)}
             self._send_json(500, {"code": 500, "message": str(exc)})
@@ -315,7 +314,6 @@ class _TokenReceiver(BaseHTTPRequestHandler):
         self.server.result = {
             "status": "ok",
             "authenticated": True,
-            "expires_at": expiry,
         }
         self._send_json(200, {"code": 0, "message": "short key exchanged"})
         threading.Thread(target=self.server.shutdown, daemon=True).start()

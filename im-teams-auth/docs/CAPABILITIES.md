@@ -13,8 +13,8 @@
 | 本地凭证接收 | 启动一次性回环 HTTP receiver 接收短期认证凭证 | 只监听 `127.0.0.1`，固定端口范围和路径 |
 | 会话复用 | 同一待完成认证期间复用同一个 landing URL 和 receiver | 仅当旧会话过期或 receiver 失活时才新建会话 |
 | Token 兑换 | 通过 HTTPS 将短期认证凭证兑换为公网 IM token | 长期 token 不经过认证页回传给 receiver |
-| 安全存储 | 将 token 和过期时间写入 OS Keyring | 不写入明文文件或日志 |
-| 缓存复用 | 有有效缓存时直接复用，默认缓存 7 天 | 环境变量优先于 Keyring |
+| 安全存储 | 将 token 写入 OS Keyring（不记本地过期时间） | 不写入明文文件或日志 |
+| 缓存复用 | Keyring 里有 token 即直接复用，token 失效以服务端为准（返认证码即重认证） | 环境变量优先于 Keyring |
 | 强制重新认证 | 清理当前缓存并重新执行认证 | 仅清理 Keyring，不会移除环境变量 |
 | 凭证清理 | 清除当前或全部已配置环境的 Keyring token | 环境变量需要调用方自行移除 |
 | 业务 skill 集成 | 以退出码和 JSON 状态向调用方返回结果 | 认证策略只由本 skill 定义 |

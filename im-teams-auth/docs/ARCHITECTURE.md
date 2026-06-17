@@ -71,7 +71,7 @@ sequenceDiagram
     Receiver->>Receiver: 校验路径、Origin、state、会话时效、请求格式
     Receiver->>Exchange: HTTPS 兑换短期凭证
     Exchange-->>Receiver: 公网 IM token
-    Receiver->>Keyring: 保存 token 和过期时间
+    Receiver->>Keyring: 保存 token（不记本地过期）
     Auth-->>Caller: status=ok
   end
 ```
@@ -100,7 +100,7 @@ sequenceDiagram
 | 会话时效 | 不得晚于 URL 中的 `request_expires_at` |
 | 窗口 ID | `win_id` 固定等于 `session_id` |
 
-认证页 POST 数据（只回传 `state` 和 `encrypt`；token 过期时间由脚本侧默认 7 天，页面不回传 `expiresAt`，脚本仍兼容传入但页面不发送）：
+认证页 POST 数据（只回传 `state` 和 `encrypt`；脚本不记本地过期，token 失效以服务端为准）：
 
 ```json
 {
@@ -116,7 +116,7 @@ sequenceDiagram
 1. 对应环境的 token 环境变量。
 2. 对应环境的 OS Keyring 凭证。
 
-Keyring 同时存储 token 和过期时间。没有有效过期时间、已过期或读取失败时，凭证视为不可用。默认缓存有效期为 7 天；认证结果提供有效时间时，使用有效的认证结果时间。
+Keyring 只存 token，不记本地过期时间。Keyring 里有 token 即视为可用、直接复用；token 是否真失效以服务端为准——业务接口返回 `gateway_errors.is_auth_code` 那一组认证码（含 401/403 及登录过期、账号停用等业务码）时，删 token 重认证。读取失败或无 token 时凭证视为不可用。
 
 清理操作只处理 Keyring。若调用进程设置了环境变量 token，脚本会返回警告，但不会修改外部环境变量。
 

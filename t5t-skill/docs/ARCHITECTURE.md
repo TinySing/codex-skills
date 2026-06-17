@@ -325,7 +325,7 @@ t5t_client.create_request_context
 
 token 读取优先级：环境变量 `IM_TEAMS_GATEWAY_TOKEN_<ENV>` > Keyring。环境变量 token 无本地过期时间。
 
-> **两层失效检测**：①本地预检——`load_token` 读 Keyring 时校验本地过期时间，过期/缺失即退出码 4（不联网）；②服务端兜底——本地 token 看似有效但已被服务端作废时，业务接口会返回认证类网关码（见 §二 `gateway_errors.is_auth_code`，如 10230/12001 等），`request_json` 据此抛 `AuthExpiredError` → 退出码 4。两者都走同一条「`--start --no-cache`（删本地 token）重认证」补救。这就是「服务端失效但本地过期时间没到」也能被识别的机制。
+> **失效检测以服务端为准**：①本地只看 token 在不在——`load_token` 读 Keyring，有 token 就用（**不再判本地过期**），无 token 即退出码 4（不联网）；②服务端兜底——本地 token 看似有效但已被服务端作废时，业务接口返回认证类网关码（见 §二 `gateway_errors.is_auth_code`，如 10230/12001 等），`request_json` 据此抛 `AuthExpiredError` → 退出码 4。两者都走同一条「`--start --no-cache`（删本地 token）重认证」补救。token 能用多久用多久，由服务端决定，不在本地人为设过期。
 
 > **业务脚本不再内嵌交互式认证**：交互认证需要监听本机端口并等待用户操作，嵌在业务调用里会长时间阻塞（沙箱里还会因端口绑定失败报错）。未认证时脚本立即退出码 4，由代理按 SKILL.md「失败与认证分支协议」显式拉起 `im-teams-auth`（全任务最多一次），成功后重试原命令一次。
 
@@ -355,8 +355,7 @@ t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyr
 |----|----|
 | service | `im-teams-auth:production` / `im-teams-auth:test` |
 | token key | `gateway_token` |
-| expiry key | `gateway_token_expiry` |
-| 默认过期 | 7 天 |
+| 本地过期 | 不记（有 token 即用，失效以服务端为准——返回 `is_auth_code` 那组认证码即重认证） |
 | 平台 | macOS Keychain / Windows Credential Manager |
 
 > `auth.py` 启动即 `ensure_keyring()`：缺失时自动 `pip install keyring`，装不上直接返回错误，**不会先弹认证窗再在保存时失败**（避免白认证一次）。
