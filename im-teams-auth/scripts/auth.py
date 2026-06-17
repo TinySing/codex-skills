@@ -131,7 +131,10 @@ def _find_port(preferred_port: int | None = None) -> int:
                 return port
             except OSError:
                 continue
-    raise AuthError(f"无法在端口 {candidates} 中绑定本地接收服务")
+    raise AuthError(
+        "无法绑定本地接收端口 35101-35110（很可能被沙箱或防火墙限制了本机端口监听）。"
+        "认证需要监听 127.0.0.1 接收回传，请在本地终端或非沙箱环境重试认证。"
+    )
 
 
 def _same_origin(url: str) -> str:
@@ -455,7 +458,7 @@ def _handle_start(args: argparse.Namespace) -> int:
             }
         else:
             detach_kwargs = {"start_new_session": True}
-        subprocess.Popen(
+        proc = subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -468,11 +471,16 @@ def _handle_start(args: argparse.Namespace) -> int:
             if _is_reusable_pending_session(snapshot, args.env):
                 session = snapshot
                 break
+            # 后台进程在建立会话前就退出 = 起不来（多为沙箱禁端口监听/禁后台进程）。
+            # 立即失败、给精确提示，不必干等满 10 秒。成功时它会常驻持有 receiver，poll() 为 None。
+            if proc.poll() is not None:
+                break
             time.sleep(0.3)
         if session is None:
             _json_print({
                 "status": "error",
-                "message": "认证服务启动失败（本机端口 35101-35110 不可用或当前环境受限）",
+                "message": "认证服务启动失败：当前环境（很可能是受限沙箱）不允许本机监听端口或起后台进程，认证无法在此完成。",
+                "hint": "立刻告知用户：当前环境无法完成自动认证（需监听 127.0.0.1:35101-35110 并拉起 Teams），请在本地终端或非沙箱环境重试；同时把已生成的内容交给用户。不要重试。",
                 "environment": args.env,
             })
             return 1

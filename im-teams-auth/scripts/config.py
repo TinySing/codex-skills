@@ -26,7 +26,8 @@ ENV_LANDING_URL = "IM_TEAMS_AUTH_LANDING_URL"
 # 默认运行环境。调试时只需在 production 和 test 之间修改此字段。
 ACTIVE_ENVIRONMENT = "test"
 
-TOKEN_MAX_AGE_SECONDS = 3 * 24 * 3600
+# 本地 token 默认有效期：页面不回传 expiresAt 时用它。与 env_check 的 python 路径缓存（7 天）保持一致。
+TOKEN_MAX_AGE_SECONDS = 7 * 24 * 3600
 RECEIVER_HOST = "127.0.0.1"
 RECEIVER_PORTS = list(range(35101, 35111))
 # 认证等待超时（秒）：receiver 等用户完成授权回传 token 的最长时间，即 --wait 最长阻塞时长。

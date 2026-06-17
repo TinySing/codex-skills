@@ -1,6 +1,32 @@
 ---
 name: t5t-skill
-description: 生成、修改、查询或浏览 T5T（Top 5 Things 工作重点）。根据周报、会议纪要、项目进展、客户反馈等材料，提炼不超过 5 条、每条 80 字内、按优先级排序的重点，确认后写入 360Teams；也能查询最新已填写的 T5T、浏览最近多条。用户要写下周 T5T、修改已有 T5T、把材料整理成 T5T、或查询/查看/浏览自己已填的 T5T 时使用；系统接口或认证不可用时，仍然完成内容生成并交付给用户手动提交。
+description: 生成、修改、查询或浏览 T5T（360Teams 的 Top 5 Things，每周工作重点）。当用户要写/填下周 T5T、把周报或会议纪要等材料整理成 T5T、查看或修改自己已填的 T5T 时使用；接口或认证暂时不可用时，仍完成内容生成并交付用户手动提交。
+allowed-tools:
+    # env_check 引导（裸解释器启动，三种 launcher）
+    - Bash(python *env_check.py*)
+    - Bash(python3 *env_check.py*)
+    - Bash(py *env_check.py*)
+    - PowerShell(python *env_check.py*)
+    - PowerShell(py *env_check.py*)
+    # 业务/认证脚本：用 env_check 得到的 python_path 绝对路径调用，故以 *脚本名* 匹配任意解释器前缀
+    - Bash(*env_check.py*)
+    - Bash(*submit_t5t.py*)
+    - Bash(*query_t5t.py*)
+    - Bash(*edit_t5t.py*)
+    - Bash(*auth.py*)
+    - PowerShell(*env_check.py*)
+    - PowerShell(*submit_t5t.py*)
+    - PowerShell(*query_t5t.py*)
+    - PowerShell(*edit_t5t.py*)
+    - PowerShell(*auth.py*)
+    # pip 安装 keyring（env_check 自动装时用）
+    - Bash(python -m pip install keyring)
+    - Bash(python3 -m pip install keyring)
+    # 读取技能自身目录
+    - Read(*t5t-skill*)
+    - Read(*im-teams-auth*)
+compatibility:
+  python: ">=3.9"
 ---
 
 # T5T Skill
@@ -14,7 +40,7 @@ description: 生成、修改、查询或浏览 T5T（Top 5 Things 工作重点�
 1. **生成是核心能力，接口只是提交通道。** 内容提炼完全靠模型自身，不依赖任何接口。认证或接口失败时，必须把已生成的 T5T 内容完整交付给用户并给出手动提交指引（见「失败与认证分支协议」），绝不能因为接口不通就什么都不交付。
 2. **失败快速分支，不重试不深挖。** 任何脚本失败后，按分支协议处理一次即停止；禁止反复重试同一命令、禁止连环调用其他接口“排查”、禁止主动去读脚本源码找原因（脚本输出的 `message` 和 `hint` 已包含可操作信息）。
    - **`status:"error"` = 终点，立刻收尾。** 脚本把结果 JSON 打到 stdout，**退出码非 0 时 stdout 一样有完整 JSON**——那就是结论。看到 `status:"error"` 的那一刻，本任务的脚本调用**就结束了**：除认证失效（`status:"expired"`/退出码 4，走认证分支）外，**一律直接走「降级交付」**。
-   - **严禁这些「再试一下」动作**（看到 error 后全部禁止）：重跑同一命令、加 `2>&1`/改重定向「抓输出」、换 `python`/`py -3`、`--version`、列目录、跑 `query_t5t.py --latest` 之类去「确认状态」。**别拿「我好像没看到输出」当借口**——输出就在那、`status` 字段就是结论，重跑/重定向只会拿到同一个 JSON，白费两轮还惹审批。`message` 是网络/服务问题就照它降级，结束。
+   - **严禁这些「再试一下」动作**（看到 error 后全部禁止）：重跑同一命令、加 `2>&1`/改重定向「抓输出」、再跑 `env_check`、换 `python`/`py -3`、`--version`、列目录、跑 `query_t5t.py --latest` 之类去「确认状态」。**别拿「我好像没看到输出」当借口**——输出就在那、`status` 字段就是结论，重跑/重定向只会拿到同一个 JSON，白费两轮还惹审批。`message` 是网络/服务问题就照它降级，结束。
 3. **前置数据只取一次，后续复用。** 同一任务内每类查询（周期、最新详情、抄送人）只调用一次，后续步骤复用已返回的数据；脚本返回里已包含的数据不要再发起新查询。payload 组装由脚本在提交时完成，代理不提前组装。
 4. **后台静默。** 解释器探测、脚本调用、查询、校验、提交都是后台动作。用户只应看到：生成的内容、一次必要的确认、最终结果（或失败说明 + 手动指引）。不发“正在查询/正在核对/正在提交”等过程播报，不展示命令、脚本输出、内部术语。
 
@@ -43,13 +69,25 @@ description: 生成、修改、查询或浏览 T5T（Top 5 Things 工作重点�
 
 ## 运行前置
 
-脚本需要 Python 3.9+。**先记死这条铁律，再看怎么跑**：
+脚本需要 Python 3.9+，且命令参数含**中文**（T5T 内容）——必须避开会截断中文的 VM shim 假 Python。所以每个任务**先跑 env_check 拿可靠的 Python 路径，再用它跑业务命令**。
 
-> **判据极简：只要 `python3 …` 这条命令被执行了——没被 shell 以 `command not found`/`不是内部或外部命令` 拒绝——就证明 Python 装好且可用，哪怕它返回的是网络错误 JSON、空输出、甚至报错堆栈，都一样说明 Python 没问题。** 从这一刻起本任务**永久锁定该解释器**：不得再换 `python`/`py -3`、不得探测 Python、不得 `--version`、不得列目录。**唯一**说明 Python 不可用的信号，是 shell 直接报 `command not found`（解释器根本没被调起）。**业务报错（`status:"error"`，网络/服务/认证）是业务结果**，走「失败与认证分支协议」，和 Python 环境**毫无关系**——绝不能因此切解释器、探测环境或报「Python 环境未就绪」。
+**步骤零（任务第一步，先于任何业务/认证命令）：检测 Python 路径**
 
-具体跑法：直接用 `python3` 跑第一条业务命令（**不单独探测解释器**）；**只有**它报 `command not found`/`不是内部或外部命令`（脚本没起来）才依次换 `python`、`py -3` 重跑同一条命令，沿用成功的那个（`im-teams-auth` 经 `sys.executable` 继承）；三者都报没有才请用户装 Python 3.9+（https://www.python.org/downloads/）或确认 PATH，不反复重试。只生成/整理/润色内容时不运行任何命令、不读脚本和文档。
+```bash
+python3 ../im-teams-auth/scripts/env_check.py
+# 输出: {"status":"ok","python_path":"/绝对/路径/python","version":...,"platform":...,"cached":...}
+```
 
-**脚本一律用绝对路径调用，不要依赖当前目录。** 下文命令里的 `scripts/xxx.py`、`../im-teams-auth/...` 都是相对本 skill 目录写的；shell 的 cwd 不一定在这里，直接跑相对路径会报“文件不存在”，还得多花回合去探目录。**把 `scripts/xxx.py` 换成本 skill 目录（即本 SKILL.md 所在目录）的绝对路径再执行**，例如 `python3 <本skill目录>/scripts/submit_t5t.py ...`。不要先去 `cd`、也不要先列目录结构猜路径。
+- 用 `python3` 起这条；**仅当**它报 `command not found`/`不是内部或外部命令`、或沙箱返回非标准退出码（如 `49`，说明裸命令不可用）时，依次换 `python`、`py -3` 起同一条 env_check；三者都起不来、或 env_check 返回 `status:"error"`（没装 Python 3.9+）时：**先把已生成的 T5T 内容照常交给用户**（生成不需要 Python），再提示「装 Python 3.9+（https://www.python.org/downloads/）或确认 PATH 后我可帮你自动提交」，不反复重试。
+- 从输出取 **`python_path`**：**本任务后续所有命令（submit/query/edit/auth）一律用这个绝对路径**，即下文示例里的 `{python_path}`，**严禁再用裸 `python3`/`python`**。同一会话只测一次（env_check 自带 7 天缓存，后续毫秒级返回）。
+
+> **为什么必须这样**：① 沙箱（WorkBuddy 等）`python` 不在 PATH，裸命令返回非标准退出码（如 `49`），直接跑业务脚本会失败；② VM shim 是会**截断中文参数**的假 Python，env_check 自动排除它，保证 T5T 中文内容不被截断；③ env_check 缓存路径 7 天，后续毫秒级返回。
+
+**拿到 `python_path` 后就锁定它**：后续不再跑 env_check、不再探测/切换解释器、不 `--version`、不列目录。业务脚本返回 `status:"error"`（网络/服务/认证）是**业务结果**，走「失败与认证分支协议」，与 Python 环境**毫无关系**——绝不因此重测环境或报「Python 环境未就绪」。
+
+只生成/整理/润色内容时不运行任何命令、不读脚本和文档。
+
+**脚本一律用绝对路径调用，不要依赖当前目录。** 下文命令里的 `scripts/xxx.py`、`../im-teams-auth/...` 都是相对本 skill 目录写的；shell 的 cwd 不一定在这里，直接跑相对路径会报“文件不存在”，还得多花回合去探目录。**把 `scripts/xxx.py` 换成本 skill 目录（即本 SKILL.md 所在目录）的绝对路径再执行**，例如 `{python_path} <本skill目录>/scripts/submit_t5t.py ...`（`{python_path}` 用步骤零的检测结果）。不要先去 `cd`、也不要先列目录结构猜路径。
 
 环境保密：运行环境是内部实现细节，面向用户的回复中禁止出现环境名、`--env`、`test`、`production`、“默认环境”等字样；仅开发者明确要求排查配置时才讨论。
 
@@ -117,13 +155,13 @@ T5T 的填写周期横跨两个自然周——**当前周的周四 ~ 下周三**
 用户已授权或确认后，一次调用完成核对与提交：
 
 ```bash
-python3 scripts/submit_t5t.py --commit-confirmed --open-preview --items-json '<T5T JSON>'
+{python_path} scripts/submit_t5t.py --commit-confirmed --open-preview --items-json '<T5T JSON>'
 ```
 
 **只有**用户明确要**更新已有的最新 T5T**（清楚知道最新周期已有内容、并要替换它）时，才加 `--update-if-exists`，同一进程内“没填就新建、已填就就地更新”：
 
 ```bash
-python3 scripts/submit_t5t.py --commit-confirmed --update-if-exists --open-preview --items-json '<T5T JSON>'
+{python_path} scripts/submit_t5t.py --commit-confirmed --update-if-exists --open-preview --items-json '<T5T JSON>'
 ```
 
 > ⚠️ `--update-if-exists` 会**静默覆盖**最新周期的现有内容、不弹冲突。判不准用户是否知道已有内容，就**别加这个标志**——用 plain `--commit-confirmed`，让 `already_submitted` 冲突浮出来再问用户。泛泛的“帮我写/写下周”不算明确授权更新。
@@ -151,7 +189,7 @@ python3 scripts/submit_t5t.py --commit-confirmed --update-if-exists --open-previ
    - 用户在原请求里就**已明确表示知道现有内容、要替换它**（本该第一步带 `--update-if-exists`、没带才落到这里）→ 可不再追问直接更新。**只要不确定就走告知+询问。**
 
 ```bash
-python3 scripts/edit_t5t.py --commit-confirmed --id '<详情 id>' --open-preview --items-json '<新内容 JSON>'
+{python_path} scripts/edit_t5t.py --commit-confirmed --id '<详情 id>' --open-preview --items-json '<新内容 JSON>'
 ```
 
 **关键：撞到 `already_submitted` 默认意味着用户大概率不知道已有内容——先告知、展示、询问，拿到明确“更新”才提交，永不静默覆盖。** 泛泛的“帮我写/写下周”不构成更新授权。
@@ -161,7 +199,7 @@ python3 scripts/edit_t5t.py --commit-confirmed --id '<详情 id>' --open-preview
 第一步，查询（用户明确要查或要改时才执行，只读脚本）：
 
 ```bash
-python3 scripts/query_t5t.py --latest
+{python_path} scripts/query_t5t.py --latest
 ```
 
 - `status: not_found`：告知没有已填写的 T5T，结束。
@@ -175,13 +213,13 @@ python3 scripts/query_t5t.py --latest
 - **更新最新单条（推荐，一步到位）**：用 `--latest`，自动定位最新→核对→提交，无需先单独查 id：
 
 ```bash
-python3 scripts/edit_t5t.py --commit-confirmed --latest --open-preview --items-json '<修改后完整 T5T JSON>'
+{python_path} scripts/edit_t5t.py --commit-confirmed --latest --open-preview --items-json '<修改后完整 T5T JSON>'
 ```
 
 - **已知具体 id**（如刚用 `query_t5t.py --latest` 拿到，或要改的不是最新单条）：用 `--id`：
 
 ```bash
-python3 scripts/edit_t5t.py --commit-confirmed --id '<详情 id>' --open-preview --items-json '<修改后完整 T5T JSON>'
+{python_path} scripts/edit_t5t.py --commit-confirmed --id '<详情 id>' --open-preview --items-json '<修改后完整 T5T JSON>'
 ```
 
 - `--items-json` 同样遵守路径 B 的**强制纯字符串数组格式**（`["改后内容一",...]`，最多 5 条、每条 ≤80 字、无空串、不包对象）。格式校验已内置在提交里（不联网先校验），**不必单独预跑 `--validate-items`**；格式错按 `message` 重新生成再提交，最多 3 次。
@@ -193,7 +231,7 @@ python3 scripts/edit_t5t.py --commit-confirmed --id '<详情 id>' --open-preview
 ## 路径 D：浏览最近列表（只读）
 
 ```bash
-python3 scripts/query_t5t.py --list-recent --page-size 5
+{python_path} scripts/query_t5t.py --list-recent --page-size 5
 ```
 
 `--page-size` 控制条数（默认 5），`--page-num` 控制页码。返回 `status: recent_list`，展示每条的周期名和内容后即结束。修改永远只针对最新单条，不基于历史条目修改。
@@ -211,7 +249,7 @@ python3 scripts/query_t5t.py --list-recent --page-size 5
 1. **拉起认证**（秒级返回；当前在受限沙箱时应申请非沙箱执行，认证需要监听本机端口）。**必须带 `--no-cache`**：业务命令退出码 4 既可能是本地没有 token，也可能是本地 token 看似有效但已被服务端作废——不清缓存会被「本地有效」短路而跳过真认证：
 
 ```bash
-python3 ../im-teams-auth/scripts/auth.py --start --no-cache
+{python_path} ../im-teams-auth/scripts/auth.py --start --no-cache
 ```
 
    - `status: error`：不重试，走降级交付并说明可稍后再试。
@@ -229,7 +267,7 @@ python3 ../im-teams-auth/scripts/auth.py --start --no-cache
 2. **发完链接后等待结果**：
 
 ```bash
-python3 ../im-teams-auth/scripts/auth.py --wait
+{python_path} ../im-teams-auth/scripts/auth.py --wait
 ```
 
    - 退出码 `0`：重试原业务命令**一次**。仍失败 → 停止一切接口调用，走降级交付。

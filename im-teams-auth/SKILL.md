@@ -1,6 +1,25 @@
 ---
 name: im-teams-auth
-description: 获取并缓存 360Teams 公网 IM token。通过 Teams 客户端完成认证，兑换 token 写入 OS Keyring（macOS/Windows），支持检查、重新认证与清除。业务 skill 需要 360Teams IM token、收到认证失效（退出码 4）、或用户要求重新认证/退出登录时使用。
+description: 360Teams 账号认证的前置依赖 skill，供 t5t 等 360Teams 业务 skill 内部调用以获取访问凭证。通常不单独面向用户请求触发——业务 skill 在需要认证或收到认证失效时按其说明自行调用，不作为独立技能直接命中。
+allowed-tools:
+    # env_check 引导（裸解释器启动，三种 launcher）
+    - Bash(python *env_check.py*)
+    - Bash(python3 *env_check.py*)
+    - Bash(py *env_check.py*)
+    - PowerShell(python *env_check.py*)
+    - PowerShell(py *env_check.py*)
+    # env_check / auth 脚本：用 python_path 绝对路径调用，故以 *脚本名* 匹配任意解释器前缀
+    - Bash(*env_check.py*)
+    - Bash(*auth.py*)
+    - PowerShell(*env_check.py*)
+    - PowerShell(*auth.py*)
+    # pip 安装 keyring（env_check 自动装时用）
+    - Bash(python -m pip install keyring)
+    - Bash(python3 -m pip install keyring)
+    # 读取技能自身目录
+    - Read(*im-teams-auth*)
+compatibility:
+  python: ">=3.9"
 ---
 
 # IM Teams Auth
@@ -32,9 +51,18 @@ description: 获取并缓存 360Teams 公网 IM token。通过 Teams 客户端�
 - Windows Credential Manager
 - 自动安装 `keyring`（若缺失），其余仅依赖 Python 标准库
 
-运行前置：脚本需要 Python 3.9+。**不要单独花一步探测解释器**——直接用 `python3` 运行需要的命令；只有报 `command not found`/`不是内部或外部命令`、或 macOS 弹「安装命令行开发者工具」、Windows 跳应用商店时，才依次换 `python`、`py -3` 重跑同一条命令，本任务后续沿用成功的那个（若由 `t5t-skill` 等业务 skill 调起，沿用业务 skill 已确定的解释器，脚本经 `sys.executable` 自动继承）。三者都不可用时再提示用户：「需要安装 Python 3.9+（https://www.python.org/downloads/），或确认 Python 已加入 PATH，然后重试」，不要直接断言没装，也不要反复重试同一命令。
+运行前置：脚本需要 Python 3.9+。**先跑 env_check 拿 `python_path`，再用它跑所有命令**（避开会截断参数的 VM shim、兼容沙箱 PATH 缺失）：
 
-**脚本一律用绝对路径调用，不要依赖当前目录。** 下文命令里的 `scripts/auth.py` 是相对本 skill 目录写的；shell 的 cwd 不一定在这里，直接跑相对路径会报“文件不存在”。**把 `scripts/auth.py` 换成本 skill 目录（即本 SKILL.md 所在目录）的绝对路径再执行**，例如 `python3 <本skill目录>/scripts/auth.py ...`。不要先 `cd`、也不要先列目录结构猜路径。
+```bash
+python3 scripts/env_check.py
+# 输出 {"status":"ok","python_path":"/绝对/路径/python","keyring_available":...}
+```
+
+- 用 `python3` 起这条；**仅当**它报 `command not found`/`不是内部或外部命令`、或沙箱返回非标准退出码（如 `49`）时，依次换 `python`、`py -3` 起同一条；三者都不行才提示用户装 Python 3.9+（https://www.python.org/downloads/）或确认 PATH，不反复重试、不直接断言没装。
+- 从输出取 **`python_path`**：后续所有 `auth.py` 命令一律用它（下文示例里的 `{python_path}`），**不再用裸 `python3`/`python`**；同会话只测一次（env_check 7 天缓存，并顺手装好 keyring）。
+- **若由 `t5t-skill` 等业务 skill 调起**：直接沿用业务 skill 已检测的 `python_path`，无需重跑 env_check。
+
+**脚本一律用绝对路径调用，不要依赖当前目录。** 下文命令里的 `scripts/auth.py` 是相对本 skill 目录写的；shell 的 cwd 不一定在这里，直接跑相对路径会报“文件不存在”。**把 `scripts/auth.py` 换成本 skill 目录（即本 SKILL.md 所在目录）的绝对路径再执行**，例如 `{python_path} <本skill目录>/scripts/auth.py ...`。不要先 `cd`、也不要先列目录结构猜路径。
 
 ## 原理
 
@@ -51,8 +79,8 @@ python3 scripts/env_check.py
 登录认证（代理标准用法，两段式，不阻塞用户）：
 
 ```bash
-python3 scripts/auth.py --start   # 后台拉起认证，立即返回 appLinkUrl（发给用户）等链接
-python3 scripts/auth.py --wait    # 把链接发给用户后再执行，等待认证完成
+{python_path} scripts/auth.py --start   # 后台拉起认证，立即返回 appLinkUrl（发给用户）等链接
+{python_path} scripts/auth.py --wait    # 把链接发给用户后再执行，等待认证完成
 ```
 
 `--start` 秒级返回：`status: ok` 表示已有有效 token；`status: pending` 表示已拉起认证，输出里带 `appLinkUrl`（**发给用户的可点 Teams 链接**，https，任何客户端可点，必有）、`schemeUrl`（teamssit:// 协议链接，仅脚本内部自动拉起用，**不发给用户**）、`hint`，以及部分场景下的 `landingUrl`（浏览器打开，脚本按场景决定是否提供）。重复执行 `--start` 会复用同一个认证会话和链接（窗口被关掉时再跑一次拿同一链接即可）。
@@ -60,7 +88,7 @@ python3 scripts/auth.py --wait    # 把链接发给用户后再执行，等待�
 登录认证（单命令阻塞式，适合用户自己在终端跑）：
 
 ```bash
-python3 scripts/auth.py
+{python_path} scripts/auth.py
 ```
 
 未显式传入 `--env` 时，脚本使用 `scripts/config.py` 中的配置。下面带 `--env` 的命令仅用于开发调试示例，不是面向最终用户的话术。
@@ -68,43 +96,31 @@ python3 scripts/auth.py
 测试环境：
 
 ```bash
-python3 scripts/auth.py --env test
+{python_path} scripts/auth.py --env test
 ```
 
 检查认证状态：
 
 ```bash
-python3 scripts/auth.py --check --env production
+{python_path} scripts/auth.py --check --env production
 ```
 
 强制重新认证：
 
 ```bash
-python3 scripts/auth.py --no-cache
+{python_path} scripts/auth.py --no-cache
 ```
 
 清除当前环境 token：
 
 ```bash
-python3 scripts/auth.py --clear --env production
+{python_path} scripts/auth.py --clear --env production
 ```
 
 清除所有环境 token：
 
 ```bash
-python3 scripts/auth.py --clear-all
-```
-
-macOS/Linux 也可以用包装脚本：
-
-```bash
-./scripts/run.sh auth
-```
-
-Windows 可以用：
-
-```bat
-scripts\run.bat auth
+{python_path} scripts/auth.py --clear-all
 ```
 
 脚本默认不会直接打开落地页，而是打开 Teams scheme：
@@ -116,7 +132,7 @@ sk360teams://applink/link?url=<encoded landing url>
 
 ## Storage
 
-凭证只存 OS Keyring，不写明文文件。Token 默认过期时间为 3 天。
+凭证只存 OS Keyring，不写明文文件。Token 默认过期时间为 7 天。
 
 认证进行中会在 `cache/pending_session_<env>.json` 记录待完成会话（`state`、`receiver`、`landingUrl`、超时等元数据，**不含 token**），供并发触发时复用同一窗口；认证成功后删除，残留也会在下次运行按状态/时效清理。配套 `cache/pending_session_<env>.lock` 为短时互斥锁，进程异常退出残留时超过 30 秒会被自动抢占。
 
@@ -147,10 +163,10 @@ IM_TEAMS_GATEWAY_TOKEN_TEST
 
 标准流程：
 
-1. 执行 `python3 scripts/env_check.py` 检查 Python 与 keyring。
-2. 按当前环境执行 `python3 scripts/auth.py --check`；如需临时覆盖再显式传 `--env`。
+1. 执行 `python3 scripts/env_check.py` 取 `python_path`（并自动装好 keyring）；后续 `auth.py` 命令一律用 `python_path`。
+2. 按当前环境执行 `{python_path} scripts/auth.py --check`；如需临时覆盖再显式传 `--env`。
 3. 已认证则直接复用当前环境对应的 Keyring token。
-4. 未认证则按「调用方分支协议」执行 `python3 scripts/auth.py --start`，把链接发给用户后执行 `--wait`（用户自己在终端跑时可直接 `python3 scripts/auth.py`）。
+4. 未认证则按「调用方分支协议」执行 `{python_path} scripts/auth.py --start`，把链接发给用户后执行 `--wait`（用户自己在终端跑时可直接 `{python_path} scripts/auth.py`）。
 5. 脚本先启动本地 receiver：`http://127.0.0.1:35101-35110/token`。
 6. 脚本拼出认证页 URL，并带上 `navigation_to=win`、`win_config`、`state`、`receiver`、`request_expires_at`、`session_id`、`win_id`。
 7. 脚本打开 Teams scheme：`<scheme>applink/link?url=<encoded landing url>`。
@@ -168,7 +184,7 @@ IM_TEAMS_GATEWAY_TOKEN_TEST
 
 业务 skill 的脚本不会在内部自动拉起交互式认证：遇到未认证或认证失效会以退出码 `4` 快速返回，由代理显式调用本 skill。代理处理规则：
 
-1. **第一步 `auth.py --start --no-cache`**（秒级返回，receiver 由后台子进程持有；当前在受限沙箱时应申请非沙箱执行，receiver 需要监听本机 `127.0.0.1:35101-35110`）。**业务命令退出码 4 触发的补救必须带 `--no-cache`**：服务端可能已把 token 作废而本地仍在 3 天有效期内，不清缓存 `--start` 会被「本地有效」短路返回 `ok`，重试业务后再次 401，坏 token 永远不被刷新。不带 `--no-cache` 的 `--start` 仅用于主动预检场景：
+1. **第一步 `auth.py --start --no-cache`**（秒级返回，receiver 由后台子进程持有；当前在受限沙箱时应申请非沙箱执行，receiver 需要监听本机 `127.0.0.1:35101-35110`）。**业务命令退出码 4 触发的补救必须带 `--no-cache`**：服务端可能已把 token 作废而本地仍在 7 天有效期内，不清缓存 `--start` 会被「本地有效」短路返回 `ok`，重试业务后再次 401，坏 token 永远不被刷新。不带 `--no-cache` 的 `--start` 仅用于主动预检场景：
    - `status: ok`（仅不带 `--no-cache` 时可能出现）：已有有效 token，直接重试原业务命令。
    - `status: pending`：**立即把输出里的认证链接以可点击形式发给用户**，再进入第二步。用 `appLinkUrl` 作「在 Teams 中打开认证」（https，任何客户端可点）必发；浏览器链接只在输出**包含 `landingUrl` 字段**时附加（脚本按场景决定是否提供，没有就不提浏览器）。**`schemeUrl`（teamssit:// 协议链接）多数客户端点不开，仅供脚本内部自动拉起，不要发给用户。** **整个认证全程只拉起一次、只发一次链接**：`--start` 已自动弹出一次认证窗口并返回链接，把链接发给用户一次即可，**不要重复 `--start`、不要多次触发打开、不要反复发同一条链接**；窗口被关→让用户点已发的同一条链接重开（`--start` 复用同一会话同一链接），无需再拉起。话术示例：
 
@@ -222,7 +238,7 @@ IM_TEAMS_GATEWAY_TOKEN_TEST
 
 认证页必须从框架已登录态中生成短期认证凭证，不读取、展示或打印长期 token。
 
-POST 到 receiver 的 JSON（只回传 `state` 和 `encrypt`；token 过期时间由脚本侧默认 3 天，页面不回传 `expiresAt`，脚本仍兼容传入但页面不再发送）：
+POST 到 receiver 的 JSON（只回传 `state` 和 `encrypt`；token 过期时间由脚本侧默认 7 天，页面不回传 `expiresAt`，脚本仍兼容传入但页面不再发送）：
 
 ```json
 {

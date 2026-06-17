@@ -29,8 +29,6 @@
 | `scripts/runtime.py` | 日志初始化和 `keyring` 依赖检测、安装 |
 | `scripts/env_check.py` | Python、平台和 `keyring` 环境检测 |
 | `scripts/config.py` | URL、scheme、端口、超时、Keyring 名称等静态配置 |
-| `scripts/run.sh` | macOS/Linux 命令包装 |
-| `scripts/run.bat` | Windows 命令包装 |
 
 ## 三、能力入口
 
@@ -102,7 +100,7 @@ sequenceDiagram
 | 会话时效 | 不得晚于 URL 中的 `request_expires_at` |
 | 窗口 ID | `win_id` 固定等于 `session_id` |
 
-认证页 POST 数据（只回传 `state` 和 `encrypt`；token 过期时间由脚本侧默认 3 天，页面不回传 `expiresAt`，脚本仍兼容传入但页面不发送）：
+认证页 POST 数据（只回传 `state` 和 `encrypt`；token 过期时间由脚本侧默认 7 天，页面不回传 `expiresAt`，脚本仍兼容传入但页面不发送）：
 
 ```json
 {
@@ -118,7 +116,7 @@ sequenceDiagram
 1. 对应环境的 token 环境变量。
 2. 对应环境的 OS Keyring 凭证。
 
-Keyring 同时存储 token 和过期时间。没有有效过期时间、已过期或读取失败时，凭证视为不可用。默认缓存有效期为 3 天；认证结果提供有效时间时，使用有效的认证结果时间。
+Keyring 同时存储 token 和过期时间。没有有效过期时间、已过期或读取失败时，凭证视为不可用。默认缓存有效期为 7 天；认证结果提供有效时间时，使用有效的认证结果时间。
 
 清理操作只处理 Keyring。若调用进程设置了环境变量 token，脚本会返回警告，但不会修改外部环境变量。
 

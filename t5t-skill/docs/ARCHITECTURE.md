@@ -47,6 +47,8 @@
 | `scripts/t5t_client.py` | 共享：认证、请求、解析、payload 组装、确认哈希（不可直接执行） |
 | `scripts/config.py` | 静态配置：环境、域名、API 路径、Appkey、超时、依赖路径 |
 
+> **运行前置（见 SKILL.md「运行前置」）**：每个任务先跑 `../im-teams-auth/scripts/env_check.py` 取 `python_path`，后续所有命令用该绝对路径（避开会截断中文参数的 VM shim、兼容沙箱 PATH 缺失）。本文示例里的 `python3` 仅作占位，实际用 `python_path`。
+
 ---
 
 ## 二、配置（`scripts/config.py`）
@@ -354,7 +356,7 @@ t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyr
 | service | `im-teams-auth:production` / `im-teams-auth:test` |
 | token key | `gateway_token` |
 | expiry key | `gateway_token_expiry` |
-| 默认过期 | 3 天 |
+| 默认过期 | 7 天 |
 | 平台 | macOS Keychain / Windows Credential Manager |
 
 > `auth.py` 启动即 `ensure_keyring()`：缺失时自动 `pip install keyring`，装不上直接返回错误，**不会先弹认证窗再在保存时失败**（避免白认证一次）。
