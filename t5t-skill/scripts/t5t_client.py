@@ -460,6 +460,31 @@ def format_recent_item(item: Any) -> dict[str, Any]:
     return record
 
 
+def print_latest_detail(environment: str, detail: dict[str, Any]) -> None:
+    """把最新已填写 T5T 详情收敛成展示用字段（查询与编辑前置共用）。"""
+    to_list = detail.get("toList") or []
+    if not isinstance(to_list, list):
+        raise T5TError("详情中的权限格式异常")
+    # 只输出编辑和展示需要的字段；完整接口响应不回显，减少代理要读的内容
+    json_print(
+        {
+            "status": "latest_detail",
+            "environment": environment,
+            "id": detail.get("id"),
+            "period": {
+                "reportId": detail.get("reportId"),
+                "name": detail.get("reportName") or detail.get("title"),
+            },
+            "items": parse_raw_content(detail.get("rawContent")),
+            "toList": to_list,
+            "permissions": format_copies_info(to_list),
+            "inviteSameGroupView": bool(detail.get("inviteSameGroupView", True)),
+            "sameGroupVisible": format_same_group(detail.get("inviteSameGroupView", True)),
+            "canOperate": bool(detail.get("canOperate")),
+        }
+    )
+
+
 def read_to_list(args: argparse.Namespace) -> list[Any] | None:
     if not args.to_list_json:
         return None

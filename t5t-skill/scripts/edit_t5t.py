@@ -12,25 +12,12 @@ import t5t_client as t5t
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="查询并编辑已填写 T5T")
-    parser.add_argument("--query-latest", action="store_true", help="查询最新 T5T 详情")
-    parser.add_argument(
-        "--list-recent",
-        action="store_true",
-        help="只读浏览最近 T5T 列表（不进入编辑）",
-    )
-    parser.add_argument("--page-num", type=int, default=1, help="--list-recent 的页码")
-    parser.add_argument(
-        "--page-size",
-        type=int,
-        default=5,
-        help="--list-recent 的每页条数",
-    )
+    parser = argparse.ArgumentParser(description="编辑已填写 T5T（只读查询用 query_t5t.py）")
     parser.add_argument("--id", help="需要编辑的 T5T 详情 id")
     parser.add_argument(
         "--latest",
         action="store_true",
-        help="编辑最新单条 T5T：自动定位 id，一条命令完成查最新→核对→提交，无需先 --query-latest 取 id",
+        help="编辑最新单条 T5T：自动定位 id，一条命令完成查最新→核对→提交，无需先单独查 id",
     )
     parser.add_argument("--items-json", help="修改后的完整 T5T JSON 数组")
     parser.add_argument("--content-file", help="包含修改后 T5T 内容的文件")
@@ -62,32 +49,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def print_latest_detail(environment: str, detail: dict[str, Any]) -> None:
-    to_list = detail.get("toList") or []
-    if not isinstance(to_list, list):
-        raise t5t.T5TError("详情中的权限格式异常")
-    # 只输出编辑和展示需要的字段；完整接口响应不回显，减少代理要读的内容
-    t5t.json_print(
-        {
-            "status": "latest_detail",
-            "environment": environment,
-            "id": detail.get("id"),
-            "period": {
-                "reportId": detail.get("reportId"),
-                "name": detail.get("reportName") or detail.get("title"),
-            },
-            "items": t5t.parse_raw_content(detail.get("rawContent")),
-            "toList": to_list,
-            "permissions": t5t.format_copies_info(to_list),
-            "inviteSameGroupView": bool(detail.get("inviteSameGroupView", True)),
-            "sameGroupVisible": t5t.format_same_group(
-                detail.get("inviteSameGroupView", True)
-            ),
-            "canOperate": bool(detail.get("canOperate")),
-        }
-    )
-
-
 def main(argv: list[str] | None = None) -> int:
     t5t.force_utf8_io()
     args = parse_args(argv)
@@ -102,8 +63,6 @@ def main(argv: list[str] | None = None) -> int:
         selected_modes = sum(
             bool(mode)
             for mode in (
-                args.query_latest,
-                args.list_recent,
                 args.dry_run,
                 args.skip_confirmation,
                 args.commit_confirmed,
@@ -111,10 +70,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         if selected_modes != 1:
             raise t5t.T5TError(
-                "必须且只能使用 --query-latest、--list-recent、--dry-run、"
-                "--skip-confirmation 或 --commit-confirmed 之一"
+                "必须且只能使用 --dry-run、--skip-confirmation 或 --commit-confirmed 之一"
+                "（只读查询请用 query_t5t.py）"
             )
-        if not args.query_latest and not args.list_recent and not args.id and not args.latest:
+        if not args.id and not args.latest:
             raise t5t.T5TError("编辑时必须提供 --id 或 --latest")
         if args.skip_confirmation and not args.confirmation_hash:
             raise t5t.T5TError("--skip-confirmation 提交时必须提供 --confirmation-hash")
@@ -130,43 +89,6 @@ def main(argv: list[str] | None = None) -> int:
                 raise t5t.T5TError("没检测到要修改的内容")
 
         base_url, headers = t5t.create_request_context(args)
-        if args.list_recent:
-            _list_response, items = t5t.query_self_weekly_list(
-                base_url,
-                headers,
-                args.page_num,
-                args.page_size,
-                args.timeout,
-            )
-            t5t.json_print(
-                {
-                    "status": "recent_list",
-                    "environment": args.env,
-                    "pageNum": args.page_num,
-                    "pageSize": args.page_size,
-                    "count": len(items),
-                    "records": [t5t.format_recent_item(item) for item in items],
-                }
-            )
-            return 0
-        if args.query_latest:
-            _latest_response, detail_response, detail = t5t.query_latest_detail(
-                base_url,
-                headers,
-                args.timeout,
-            )
-            if detail_response is None or detail is None:
-                t5t.json_print(
-                    {
-                        "status": "not_found",
-                        "message": "未查询到已填写的 T5T",
-                        "environment": args.env,
-                    }
-                )
-                return 0
-            print_latest_detail(args.env, detail)
-            return 0
-
         if args.id:
             detail_response, detail = t5t.query_detail(
                 base_url,
@@ -175,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.timeout,
             )
         else:
-            # --latest：自动定位最新单条，一条命令完成查最新→核对→提交，省去先 --query-latest 取 id。
+            # --latest：自动定位最新单条，一条命令完成查最新→核对→提交，省去先单独查 id。
             _latest_response, detail_response, detail = t5t.query_latest_detail(
                 base_url,
                 headers,

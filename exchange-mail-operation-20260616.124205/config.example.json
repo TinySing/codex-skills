@@ -1,0 +1,5 @@
+{
+  "_comment": "此文件仅作参考，实际凭证存入 OS Keyring，不再使用明文配置文件",
+  "username": "your_username",
+  "password": "your_password"
+}

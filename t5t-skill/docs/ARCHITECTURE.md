@@ -42,7 +42,8 @@
 | 脚本 | 职责 |
 |------|------|
 | `scripts/submit_t5t.py` | 查询可填写周期、新建 T5T |
-| `scripts/edit_t5t.py` | 浏览最近 T5T（只读）、查询最新已填写 T5T、提交编辑 |
+| `scripts/query_t5t.py` | 只读查询：查最新已填写 T5T（`--latest`）、浏览最近列表（`--list-recent`） |
+| `scripts/edit_t5t.py` | 提交编辑/更新已填写 T5T |
 | `scripts/t5t_client.py` | 共享：认证、请求、解析、payload 组装、确认哈希（不可直接执行） |
 | `scripts/config.py` | 静态配置：环境、域名、API 路径、Appkey、超时、依赖路径 |
 
@@ -86,8 +87,8 @@
 | submit/edit | `--items-json '<JSON 数组>'` | 提交内容；**强制纯字符串数组** `["a","b"]`，≤5 条、每条 ≤80 字、无空串、不包对象 |
 | submit/edit | `--open-preview` | 提交成功后返回预览链接 |
 | submit/edit | `--invite-same-group true\|false` | 同组可见（不传：新建默认 true / 编辑保留原值） |
-| edit | `--query-latest` | 查最新详情（只读） |
-| edit | `--list-recent --page-size/--page-num` | 只读分页浏览最近 |
+| query | `--latest` | 查最新详情（只读，不修改/不提交） |
+| query | `--list-recent --page-size/--page-num` | 只读分页浏览最近 |
 | edit | `--commit-confirmed --latest` | 一步更新最新单条：自动定位 id→核对→提交 |
 | edit | `--commit-confirmed --id <id>` | 编辑指定 id |
 | edit | `--to-list-json '<JSON>'` | 删抄送人（只能删，人数严格少于当前） |
@@ -123,8 +124,8 @@ flowchart TD
     U[用户请求] --> T{任务类型}
     T -->|纯生成/润色/压缩| A1["生成 ≤5条 / ≤80字 / 按优先级<br/>（0 次脚本调用）"]
     T -->|要写 T5T 但无材料| A0[请用户发送材料，不编造] --> END0[结束]
-    T -->|查询/编辑最新| C["edit_t5t.py --query-latest"]
-    T -->|浏览最近 N 条| D["edit_t5t.py --list-recent"] --> D1[展示列表，结束]
+    T -->|查询/编辑最新| C["query_t5t.py --latest"]
+    T -->|浏览最近 N 条| D["query_t5t.py --list-recent"] --> D1[展示列表，结束]
 
     A1 --> Q{用户已明确提交意图?}
     Q -->|否| C1["展示内容，问一次：要写入系统吗?"]
@@ -231,14 +232,14 @@ python3 scripts/submit_t5t.py --skip-confirmation \
 
 ## 六、查询编辑分支
 
-> 标准流程：`--query-latest` 查询后直接 `--commit-confirmed --id` 提交（见 §四 流程图）。本节第二/三步的 dry-run 两阶段仅开发排查用。
+> 标准流程：`query_t5t.py --latest` 查询后直接 `edit_t5t.py --commit-confirmed --id` 提交（见 §四 流程图）。只读查询走 `query_t5t.py`，编辑/提交走 `edit_t5t.py`。本节第二/三步的 dry-run 两阶段仅开发排查用。
 
 ### 第〇步（可选）：只读浏览最近 T5T
 
 用户只想「看看最近 N 条」时：
 
 ```bash
-python3 scripts/edit_t5t.py --list-recent --page-size 5   # --page-num 默认 1
+python3 scripts/query_t5t.py --list-recent --page-size 5   # --page-num 默认 1
 ```
 
 - 走 `query_self_weekly_list` → `/im/self?pageNum=<n>&pageSize=<size>`，经 `format_recent_item` 收敛成 `records`（`period`/`items`/`id`/`canOperate`），输出 `status: recent_list`。
@@ -247,7 +248,7 @@ python3 scripts/edit_t5t.py --list-recent --page-size 5   # --page-num 默认 1
 ### 第一步：查询最新详情
 
 ```bash
-python3 scripts/edit_t5t.py --query-latest
+python3 scripts/query_t5t.py --latest
 ```
 
 脚本流程（`query_latest_detail`）：
@@ -408,9 +409,9 @@ t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyr
 | submit `--validate-items` | `valid` / `error` | 纯本地格式校验结果（不联网） | valid→继续提交；error→按 message 重新生成 |
 | submit `--dry-run` | `dry_run` (create) | 新建待确认（仅开发排查） | 展示内容/周期/抄送人/同组可见，问确认提交 |
 | submit `--check` | `available`/`already_submitted` | 仅查周期（可选，非常规流程） | — |
-| edit `--list-recent` | `recent_list` | 最近 N 条（只读） | 展示列表后结束 |
-| edit `--query-latest` | `latest_detail` | 最新详情 | 按 canOperate 分支（false=最新周期未填，想写本周改走 submit） |
-| edit `--query-latest` | `not_found` | 无已填写 T5T | 结束 |
+| query `--list-recent` | `recent_list` | 最近 N 条（只读） | 展示列表后结束 |
+| query `--latest` | `latest_detail` | 最新详情 | 按 canOperate 分支（false=最新周期未填，想写本周改走 submit） |
+| query `--latest` | `not_found` | 无已填写 T5T | 结束 |
 | edit `--commit-confirmed --latest`/`--id` | `ok` | 编辑提交成功 | 展示周期/内容/抄送人/同组可见/预览链接 |
 | edit `--dry-run` | `dry_run` (edit) | 编辑待确认（仅开发排查） | 展示并问是否提交 |
 | 任意 | `expired` (退出码 4) | 认证失效（含 401/403 与登录/账号类网关码，删 token 重认证） | `auth.py --start --no-cache` 拉起认证，把 **appLinkUrl**（https 可点）发给用户一次，`schemeUrl` 不发用户；再 `auth.py --wait`（全任务最多一轮）；成功重试原命令一次，失败降级交付内容 |
