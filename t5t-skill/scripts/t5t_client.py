@@ -727,7 +727,7 @@ def print_error(error: Exception, environment: str) -> int:
                 "status": "expired",
                 "message": str(error),
                 "hint": (
-                    "两段式认证：先运行 im-teams-auth/scripts/auth.py --start --no-cache"
+                    "两段式认证：先运行 scripts/auth/auth.py --start --no-cache"
                     "（秒级返回；必须带 --no-cache，本地缓存的 token 可能已被服务端判定失效），"
                     "把返回的 appLinkUrl（在 Teams 中打开认证，https，任何客户端都可点）以可点击链接"
                     "立即发给用户（输出包含 landingUrl 时再附浏览器一条；窗口没弹出或被关掉时点链接可重新打开）；"

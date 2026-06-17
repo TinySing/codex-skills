@@ -24,7 +24,6 @@ allowed-tools:
     - Bash(python3 -m pip install keyring)
     # 读取技能自身目录
     - Read(*t5t-skill*)
-    - Read(*im-teams-auth*)
 compatibility:
   python: ">=3.9"
 ---
@@ -74,7 +73,7 @@ compatibility:
 **步骤零（任务第一步，先于任何业务/认证命令）：检测 Python 路径**
 
 ```bash
-python3 ../im-teams-auth/scripts/env_check.py
+python3 scripts/auth/env_check.py
 # 输出: {"status":"ok","python_path":"/绝对/路径/python","version":...,"platform":...,"cached":...}
 ```
 
@@ -87,7 +86,7 @@ python3 ../im-teams-auth/scripts/env_check.py
 
 只生成/整理/润色内容时不运行任何命令、不读脚本和文档。
 
-**脚本一律用绝对路径调用，不要依赖当前目录。** 下文命令里的 `scripts/xxx.py`、`../im-teams-auth/...` 都是相对本 skill 目录写的；shell 的 cwd 不一定在这里，直接跑相对路径会报“文件不存在”，还得多花回合去探目录。**把 `scripts/xxx.py` 换成本 skill 目录（即本 SKILL.md 所在目录）的绝对路径再执行**，例如 `{python_path} <本skill目录>/scripts/submit_t5t.py ...`（`{python_path}` 用步骤零的检测结果）。不要先去 `cd`、也不要先列目录结构猜路径。
+**脚本一律用绝对路径调用，不要依赖当前目录。** 下文命令里的 `scripts/xxx.py`、`scripts/auth/xxx.py` 都是相对本 skill 目录写的；shell 的 cwd 不一定在这里，直接跑相对路径会报“文件不存在”，还得多花回合去探目录。**把 `scripts/xxx.py` 换成本 skill 目录（即本 SKILL.md 所在目录）的绝对路径再执行**，例如 `{python_path} <本skill目录>/scripts/submit_t5t.py ...`（`{python_path}` 用步骤零的检测结果）。不要先去 `cd`、也不要先列目录结构猜路径。
 
 环境保密：运行环境是内部实现细节，面向用户的回复中禁止出现环境名、`--env`、`test`、`production`、“默认环境”等字样；仅开发者明确要求排查配置时才讨论。
 
@@ -242,14 +241,14 @@ T5T 的填写周期横跨两个自然周——**当前周的周四 ~ 下周三**
 
 ### 认证失效（退出码 4 / status `expired`）
 
-触发范围：脚本按统一网关码表（`im-teams-auth/scripts/gateway_errors.py`）识别认证失效——除 HTTP 401/403 外，**登录过期、账号异常等业务码（如 10230/10301/12001/12003/12004/10220/10241）也会自动判为认证失效**，即便本地 token 还没到过期时间。处理方式都一样：走下面的两段式认证，`--no-cache` 会先删掉本地 stale token 再重新获取。
+触发范围：脚本按统一网关码表（`scripts/auth/gateway_errors.py`）识别认证失效——除 HTTP 401/403 外，**登录过期、账号异常等业务码（如 10230/10301/12001/12003/12004/10220/10241）也会自动判为认证失效**，即便本地 token 还没到过期时间。处理方式都一样：走下面的两段式认证，`--no-cache` 会先删掉本地 stale token 再重新获取。
 
 两段式认证，先把链接给用户、再等待结果，避免用户面对长时间无反馈的等待：
 
 1. **拉起认证**（秒级返回；当前在受限沙箱时应申请非沙箱执行，认证需要监听本机端口）。**必须带 `--no-cache`**：业务命令退出码 4 既可能是本地没有 token，也可能是本地 token 看似有效但已被服务端作废——不清缓存会被「本地有效」短路而跳过真认证：
 
 ```bash
-{python_path} ../im-teams-auth/scripts/auth.py --start --no-cache
+{python_path} scripts/auth/auth.py --start --no-cache
 ```
 
    - `status: error`：不重试，走降级交付并说明可稍后再试。
@@ -267,7 +266,7 @@ T5T 的填写周期横跨两个自然周——**当前周的周四 ~ 下周三**
 2. **发完链接后等待结果**：
 
 ```bash
-{python_path} ../im-teams-auth/scripts/auth.py --wait
+{python_path} scripts/auth/auth.py --wait
 ```
 
    - 退出码 `0`：重试原业务命令**一次**。仍失败 → 停止一切接口调用，走降级交付。
@@ -330,4 +329,4 @@ T5T 的填写周期横跨两个自然周——**当前周的周四 ~ 下周三**
 
 - `docs/CAPABILITIES.md`：能力清单与支持范围速查。
 - `docs/ARCHITECTURE.md`：接口路径、payload 字段、状态码速查表、维护细节。
-- `../im-teams-auth/SKILL.md`：认证策略唯一定义方；本 skill 只消费其结果，不复制、改写或扩展认证规则与话术。
+- `docs/auth/ARCHITECTURE.md`、`docs/auth/CAPABILITIES.md`：认证子模块（`scripts/auth/`）的接口与能力细节，本 skill 内部消费，不对外暴露。

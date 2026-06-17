@@ -39,8 +39,6 @@ CLIENT_USER_AGENT_PREFIX = "T5T-Skill-Client/1.0"
 # 业务接口单次 HTTP 请求超时（秒），非认证等待；认证等待（默认 120s）由 im-teams-auth 控制。
 DEFAULT_REQUEST_TIMEOUT = 30
 
-SKILLS_ROOT = Path(__file__).resolve().parents[2]
-IM_TEAMS_AUTH_DIR = SKILLS_ROOT / "im-teams-auth"
-IM_TEAMS_AUTH_SCRIPTS_DIR = IM_TEAMS_AUTH_DIR / "scripts"
-IM_TEAMS_AUTH_SCRIPT = IM_TEAMS_AUTH_DIR / "scripts" / "auth.py"
+IM_TEAMS_AUTH_SCRIPTS_DIR = Path(__file__).resolve().parent / "auth"
+IM_TEAMS_AUTH_SCRIPT = IM_TEAMS_AUTH_SCRIPTS_DIR / "auth.py"
 IM_TEAMS_AUTH_CREDENTIAL_STORE = IM_TEAMS_AUTH_SCRIPTS_DIR / "credential_store.py"
