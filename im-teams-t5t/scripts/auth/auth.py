@@ -81,12 +81,11 @@ def _wait_for_existing_session(environment: str, session: dict,
     # 传了：本次只探这么久，会话还没到期就返回 pending，调用方可再调一次 --wait 继续等。
     poll_deadline = deadline if poll_timeout is None else min(deadline, time.time() + poll_timeout)
     while time.time() < poll_deadline:
-        token, expiry, _source = _load_cached_token(environment)
+        token, _source = _load_cached_token(environment)
         if token:
             return {
                 "status": "ok",
                 "authenticated": True,
-                "expires_at": expiry,
                 "reusedSession": True,
             }
 
@@ -120,14 +119,14 @@ def _wait_for_existing_session(environment: str, session: dict,
     return {"status": "expired", "authenticated": False, "message": "等待现有认证会话完成超时"}
 
 
-def _load_cached_token(environment: str) -> tuple[str | None, str | None, str]:
+def _load_cached_token(environment: str) -> tuple[str | None, str]:
     env_token = os.environ.get(env_token_name_for(environment))
     if env_token:
-        return env_token, None, "env"
-    token, expiry = keyring_load_token(environment)
+        return env_token, "env"
+    token = keyring_load_token(environment)
     if token:
-        return token, expiry, "keyring"
-    return None, expiry, "none"
+        return token, "keyring"
+    return None, "none"
 
 
 def _find_port(preferred_port: int | None = None) -> int:
@@ -430,12 +429,11 @@ def _handle_start(args: argparse.Namespace) -> int:
     if args.no_cache:
         keyring_clear_token(args.env)
     else:
-        token, expiry, source = _load_cached_token(args.env)
+        token, source = _load_cached_token(args.env)
         if token:
             _json_print({
                 "status": "ok",
                 "authenticated": True,
-                "expires_at": expiry,
                 "source": source,
                 "environment": args.env,
             })
@@ -501,12 +499,11 @@ def _handle_start(args: argparse.Namespace) -> int:
 
 def _handle_wait(args: argparse.Namespace) -> int:
     """等待已拉起的认证完成；token 落地或会话结束即返回。"""
-    token, expiry, _source = _load_cached_token(args.env)
+    token, _source = _load_cached_token(args.env)
     if token:
         _json_print({
             "status": "ok",
             "authenticated": True,
-            "expires_at": expiry,
             "message": "认证成功，凭证已缓存。",
             "environment": args.env,
         })
@@ -579,12 +576,11 @@ def main(argv: list[str] | None = None) -> int:
         logger.warning("OS Keyring 不可用，凭证将回退本地文件存储: %s", keyring_status.get("message"))
 
     if args.check:
-        token, expiry, source = _load_cached_token(args.env)
+        token, source = _load_cached_token(args.env)
         if token:
             _json_print({
                 "status": "ok",
                 "authenticated": True,
-                "expires_at": expiry,
                 "source": source,
                 "environment": args.env,
             })
@@ -647,13 +643,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_cache:
         keyring_clear_token(args.env)
     else:
-        token, expiry, source = _load_cached_token(args.env)
+        token, source = _load_cached_token(args.env)
         if token:
             _json_print({
                 "status": "ok",
                 "message": "已认证（使用缓存凭证）。",
                 "authenticated": True,
-                "expires_at": expiry,
                 "source": source,
                 "environment": args.env,
             })

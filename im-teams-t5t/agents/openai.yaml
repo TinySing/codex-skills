@@ -2,4 +2,4 @@
 interface:
   display_name: "T5T Skill"
   short_description: "生成、修改并按需写入下周 T5T 工作重点"
-  default_prompt: "使用 $t5t-skill 基于我的参考材料生成或修改下周 T5T，并在确认后按需写入系统。"
+  default_prompt: "使用 $im-teams-t5t 基于我的参考材料生成或修改下周 T5T，并在确认后按需写入系统。"

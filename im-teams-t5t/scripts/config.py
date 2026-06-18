@@ -36,7 +36,7 @@ COMMIT_PATH = "/dgt/tft/weekly/report/commit"
 AUTH_EXPIRED_EXIT_CODE = 4
 APP_KEY = "t5t"
 CLIENT_USER_AGENT_PREFIX = "T5T-Skill-Client/1.0"
-# 业务接口单次 HTTP 请求超时（秒），非认证等待；认证等待（默认 120s）由 im-teams-auth 控制。
+# 业务接口单次 HTTP 请求超时（秒），非认证等待；认证等待（默认 120s）由认证子模块（scripts/auth/）控制。
 DEFAULT_REQUEST_TIMEOUT = 30
 
 IM_TEAMS_AUTH_SCRIPTS_DIR = Path(__file__).resolve().parent / "auth"

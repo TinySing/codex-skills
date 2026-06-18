@@ -109,10 +109,10 @@ def keyring_save_token(token: str, environment: str) -> None:
     _save_token_file(token, environment)
 
 
-def keyring_load_token(environment: str) -> tuple[str | None, str | None]:
+def keyring_load_token(environment: str) -> str | None:
     """有 token 就返回；不判本地过期（失效由服务端认证码触发重认证）。
 
-    顺序：Keyring → 本地文件兜底。返回 (token, None)，第二位恒 None（保留二元组兼容调用方）。
+    顺序：Keyring → 本地文件兜底。
     """
     environment = normalize_environment(environment)
     if _keyring_available():
@@ -120,10 +120,10 @@ def keyring_load_token(environment: str) -> tuple[str | None, str | None]:
             import keyring
             token = keyring.get_password(keyring_service_for(environment), KEYRING_GATEWAY_TOKEN)
             if token:
-                return token, None
+                return token
         except Exception:
             pass
-    return _load_token_file(environment), None
+    return _load_token_file(environment)
 
 
 def keyring_clear_token(environment: str) -> bool:

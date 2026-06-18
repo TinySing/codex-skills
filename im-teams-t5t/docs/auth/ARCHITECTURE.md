@@ -1,6 +1,6 @@
 # IM Teams Auth 架构与执行逻辑
 
-> 本文档面向维护者，描述 `im-teams-auth` 的组件职责、认证流程、调用契约和安全边界。
+> 本文档面向维护者，描述 im-teams-t5t 认证子模块（`scripts/auth/`）的组件职责、认证流程、调用契约和安全边界。
 > 面向最终用户时，不应展示环境名、token、Keyring 位置或内部配置。
 
 配套文档：
@@ -10,14 +10,14 @@
 
 ## 一、目标与边界
 
-`im-teams-auth` 是业务 skill 共用的认证能力。它负责检查认证状态、拉起 Teams 认证、接收短期认证凭证、兑换公网 IM token、安全缓存凭证，并以稳定状态返回给调用方。
+认证子模块是 im-teams-t5t 内置的认证能力（`scripts/auth/`，供 t5t 业务脚本调用）。它负责检查认证状态、拉起 Teams 认证、接收短期认证凭证、兑换公网 IM token、安全缓存凭证，并以稳定状态返回给调用方。
 
 它不负责：
 
 - 处理任何具体业务请求。
 - 决定业务流程在认证后执行什么动作。
 - 在认证页或本地 receiver 之间传输长期 token。
-- 让业务 skill 自行定义认证条件、兜底链接或提示规则。
+- 让 t5t 业务侧自行定义认证条件、兜底链接或提示规则。
 
 ## 二、组件职责
 
@@ -43,7 +43,7 @@
 | 清除当前凭证 | `python3 scripts/auth/auth.py --clear` | 清除当前环境 token（Keyring + 本地文件兜底） |
 | 清除全部凭证 | `python3 scripts/auth/auth.py --clear-all` | 清除全部已配置环境的 token（Keyring + 本地文件兜底） |
 
-`--landing-url`、`--open-url-directly`、`--port`、`--timeout` 和 `--verbose` 属于开发调试能力，不应作为业务 skill 的常规调用方式。
+`--landing-url`、`--open-url-directly`、`--port`、`--timeout` 和 `--verbose` 属于开发调试能力，不应作为常规调用方式。
 
 ## 四、认证流程
 

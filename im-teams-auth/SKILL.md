@@ -60,7 +60,7 @@ python3 scripts/env_check.py
 
 - 用 `python3` 起这条；**仅当**它报 `command not found`/`不是内部或外部命令`、或沙箱返回非标准退出码（如 `49`）时，依次换 `python`、`py -3` 起同一条；三者都不行才提示用户装 Python 3.9+（https://www.python.org/downloads/）或确认 PATH，不反复重试、不直接断言没装。
 - 从输出取 **`python_path`**：后续所有 `auth.py` 命令一律用它（下文示例里的 `{python_path}`），**不再用裸 `python3`/`python`**；同会话只测一次（env_check 7 天缓存，并顺手装好 keyring）。
-- **若由 `t5t-skill` 等业务 skill 调起**：直接沿用业务 skill 已检测的 `python_path`，无需重跑 env_check。
+- **若由 `im-teams-t5t` 等业务 skill 调起**：直接沿用业务 skill 已检测的 `python_path`，无需重跑 env_check。
 
 **脚本一律用绝对路径调用，不要依赖当前目录。** 下文命令里的 `scripts/auth.py` 是相对本 skill 目录写的；shell 的 cwd 不一定在这里，直接跑相对路径会报“文件不存在”。**把 `scripts/auth.py` 换成本 skill 目录（即本 SKILL.md 所在目录）的绝对路径再执行**，例如 `{python_path} <本skill目录>/scripts/auth.py ...`。不要先 `cd`、也不要先列目录结构猜路径。
 

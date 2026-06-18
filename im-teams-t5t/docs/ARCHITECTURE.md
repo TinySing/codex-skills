@@ -1,6 +1,6 @@
 # T5T Skill 执行逻辑文档
 
-> 本文档描述 `t5t-skill` 的完整执行逻辑，以及它依赖的 `im-teams-auth` 认证流程。
+> 本文档描述 `im-teams-t5t` 的完整执行逻辑，以及它内置的认证子模块（`scripts/auth/`）流程。
 > 仅作开发参考；面向最终用户时禁止暴露环境名、token、Keyring 等内部细节。
 
 配套文档：
@@ -12,7 +12,7 @@
 
 ## 一、总览
 
-`t5t-skill` 把散乱材料收敛成「最多 5 条、每条 ≤80 字、按优先级排序」的工作重点（Top 5 Things），并在用户确认后写入 360Teams T5T 系统。
+`im-teams-t5t` 把散乱材料收敛成「最多 5 条、每条 ≤80 字、按优先级排序」的工作重点（Top 5 Things），并在用户确认后写入 360Teams T5T 系统。
 
 两类核心动作：
 
@@ -27,7 +27,7 @@
 - 在正式提交前生成 dry-run 和确认哈希，防止确认后内容或权限发生变化。
 - 提交成功后返回 T5T 预览链接。
 
-所有系统调用都经过认证。认证由独立的 `im-teams-auth` skill 接管，`t5t-skill` 只消费结果。
+所有系统调用都经过认证。认证由内置的认证子模块（`scripts/auth/`）完成，t5t 业务脚本只消费结果。
 
 明确不支持：
 
@@ -63,7 +63,7 @@
 | 业务接口请求超时 | 30s（`DEFAULT_REQUEST_TIMEOUT`，每次 HTTP 请求的超时，可用 `--timeout` 覆盖） |
 | 认证失效退出码 | `4` |
 
-> 这里的 30s 只是 t5t **业务接口单次 HTTP 请求**的超时，与「认证等待」无关。认证的等待超时（本地 receiver 等用户完成授权回传 token，默认 **120s**）由 `im-teams-auth` 控制，见其 `RECEIVER_TIMEOUT_SECONDS`；t5t 自身不发起认证、不持有该超时。
+> 这里的 30s 只是 t5t **业务接口单次 HTTP 请求**的超时，与「认证等待」无关。认证的等待超时（本地 receiver 等用户完成授权回传 token，默认 **120s**）由认证子模块控制，见其 `RECEIVER_TIMEOUT_SECONDS`；t5t 业务侧不发起认证、不持有该超时。
 
 接口路径：
 
@@ -176,59 +176,12 @@ flowchart TD
 
 ## 五、新建分支：两阶段兼容模式（仅开发排查用）
 
-> 标准流程是 §四 的 `--commit-confirmed` 一次完成。本节的 dry-run + skip-confirmation 两阶段仅用于开发排查或需要人工核对 payload 的场景，常规任务不要走。
+标准流程是 §四 的 `--commit-confirmed` 一次完成。新建也保留 dry-run + skip-confirmation 两阶段（仅开发排查或需人工核对 payload 时用，常规不走）：
 
-### 阶段一：确认新建信息（dry-run，不提交）
+1. `submit_t5t.py --dry-run --items-json '<JSON>'`：读缓存 token（未认证退 4）→ 重查周期（空则 `already_submitted` 中断、不提交）→ 查 `latest/copies` 抄送人 → 组装 `create` payload + `confirmationHash`，输出 `status: dry_run` / `mode: create` 立即中断。
+2. 确认后 `submit_t5t.py --skip-confirmation --report-id '<reportId>' --confirmation-hash '<hash>' --open-preview --items-json '<同上 JSON>'` 提交。
 
-两阶段模式的第一次脚本调用（无需先 `--check`）：
-
-```bash
-python3 scripts/submit_t5t.py --dry-run --items-json '<T5T JSON>'
-```
-
-脚本严格顺序（`submit_t5t.main`）：
-
-1. 读取缓存 IM token（未认证立即退出码 4，见第七节）。
-2. **再次查询周期列表**（避免确认期间状态变化）。
-3. 列表为空 → 输出 `already_submitted` 立即中断，不读内容、不查权限、不提交。
-4. 列表非空 → 取第一个周期，查 `latest/copies` 历史抄送人。
-5. 组装 `create` payload，计算 `confirmationHash`。
-6. 输出 `status: dry_run` / `mode: create` / 周期 / 权限 / payload，**立即中断**。
-
-代理把要提交的关键信息一次性展示清楚，作为唯一提交确认：
-
-```text
-即将提交：
-周期：<周期名称>
-内容：
-1. ...
-抄送人：<姓名和组织路径；没有则显示无抄送人>
-同组可见：<同组可见 或 同组不可见>
-
-确认提交吗？
-```
-
-> 同组可见默认 `true`，可选传 `--invite-same-group true|false` 覆盖；用户要求同组不可见时传 `false`。
-
-### 阶段二：确认后提交
-
-- 用户不确认 → 结束，不执行任何提交。
-- 用户确认 → 从阶段一输出取 `payload.reportId` 与 `confirmationHash`：
-
-```bash
-python3 scripts/submit_t5t.py --skip-confirmation \
-  --report-id '<已确认 reportId>' \
-  --confirmation-hash '<confirmationHash>' \
-  --open-preview \
-  --items-json '<与阶段一相同的 T5T JSON>'
-```
-
-- `--skip-confirmation` 缺 `--report-id` 或 `--confirmation-hash` → 脚本拒绝提交。
-- 脚本重算 `confirmationHash`，与传入值不一致 → 报「已确认信息发生变化，请重新查询并确认」并中断。
-- 抄送人**只能原样使用 `latest/copies` 返回值**，不接受新增/替换/构造。
-- 传过 `--invite-same-group` 时，正式提交必须带相同值，否则 `confirmationHash` 失配被拒。
-
-提交成功后向用户展示：周期名、T5T 内容、权限、同组可见、`previewLink`（点击预览）。
+约束：`--skip-confirmation` 缺 `--report-id`/`--confirmation-hash` 即拒绝；脚本重算 hash 不一致即中断（「已确认信息发生变化，请重新查询并确认」）；两次须同环境/内容/`reportId`/`confirmationHash`；传过 `--invite-same-group` 正式提交须带相同值；抄送人只能原样用 `latest/copies` 返回值，不接受新增/替换/构造。
 
 ---
 
@@ -266,51 +219,25 @@ python3 scripts/query_t5t.py --latest
 - `canOperate=true` → 询问是否修改内容、删除现有抄送人，或切换同组可见。
 - 用户只查不改 → 展示后结束。
 
-### 第二步：确认编辑信息（dry-run）
+### 第二步：编辑规则（标准 `--commit-confirmed` 与 dry-run 通用）
 
-`--id` 必须用详情返回的 `id`：
+`--id` 用详情返回的 `id`（或 `--latest` 自动定位最新单条）。三类修改可任意组合：
 
-```bash
-# 仅改内容
-python3 scripts/edit_t5t.py --dry-run --id '<详情 id>' --items-json '<修改后完整 T5T JSON>'
-
-# 仅删抄送人（传删除后的完整 toList）
-python3 scripts/edit_t5t.py --dry-run --id '<详情 id>' --to-list-json '<删除后完整 toList JSON>'
-
-# 仅切换同组可见
-python3 scripts/edit_t5t.py --dry-run --id '<详情 id>' --invite-same-group false
-```
-
-抄送人规则（**只能删，不能加**，由 `validate_reduced_to_list` 强制）：
-
-- `--to-list-json` 人数必须**严格少于**当前抄送人数；不删人就别传。
-- 每个保留对象必须原样来自详情 `toList`，不得新增/重复/篡改。
-- 用户要求**加抄送人** → 明确告知无可靠人员数据源，无法添加，不查询/猜测/构造。
-- 不传 `--items-json` 保留原内容；不传 `--to-list-json` 保留原权限；不传 `--invite-same-group` 保留原同组可见；三者都不传 → 脚本拒绝。
-- 内容 / 抄送人 / 同组可见可任意组合修改。
-
-脚本重查详情、复用 `id`/周期/`updateStamp`，输出 `status: dry_run` / `mode: edit` / payload。代理展示修改后内容并问「是否确定提交修改？」
-
-### 第三步：确认后提交
-
-```bash
-python3 scripts/edit_t5t.py --skip-confirmation \
-  --id '<详情 id>' \
-  --confirmation-hash '<编辑 dry-run 返回的 hash>' \
-  --open-preview \
-  --items-json '<与 dry-run 相同的完整 T5T JSON>'
-```
-
-- 删抄送人时正式提交必须带与 dry-run **完全相同**的 `--to-list-json`；只删人则不传 `--items-json`。
-- 切换同组可见时，正式提交必须带与 dry-run **完全相同**的 `--invite-same-group`。
-- 详情内容/权限/`updateStamp`/`canOperate`/用户修改内容发生变化 → `confirmationHash` 失配 → 中断重查。
+- 不传 `--items-json` 保留原内容；不传 `--to-list-json` 保留原抄送人；不传 `--invite-same-group` 保留原同组可见；三者都不传 → 脚本拒绝。
+- 抄送人**只能删、不能加**（`validate_reduced_to_list` 强制）：`--to-list-json` 人数必须**严格少于**当前，保留对象须原样来自详情 `toList`，不得新增/重复/篡改；用户要加抄送人 → 告知无可靠人员数据源、无法添加，不查询/猜测/构造。
 - `build_edit_payload` 二次校验 `canOperate`，为 false 直接报错。
+
+标准编辑走 §四 的 `edit_t5t.py --commit-confirmed --id/--latest`（脚本内重查详情核对后一次提交）。
+
+### 第三步：两阶段 dry-run（仅开发排查用）
+
+dev 排查时可两阶段：`--dry-run --id '<id>'`（+ `--items-json`/`--to-list-json`/`--invite-same-group` 任意组合）输出 `status: dry_run` / `mode: edit` / payload + `confirmationHash`，确认后 `--skip-confirmation --id '<id>' --confirmation-hash '<hash>' --items-json '<同上>'` 提交。两次须完全一致（含 `--to-list-json`/`--invite-same-group`）；详情内容/权限/`updateStamp`/`canOperate`/修改内容变化即 hash 失配中断。
 
 ---
 
-## 七、im-teams-auth 认证流程（被调用方）
+## 七、认证子模块流程（`scripts/auth/`）
 
-`t5t-skill` 任何系统请求前都会经 `t5t_client.load_token` 读取缓存 token。**认证策略完全由 `im-teams-auth` 定义**，`t5t-skill` 只转述其结果，不补充认证话术。
+`im-teams-t5t` 任何系统请求前都会经 `t5t_client.load_token` 读取缓存 token。**认证策略完全由认证子模块定义**，t5t 业务侧只转述其结果，不补充认证话术。
 
 ### 7.1 调用链（fail-fast）
 
@@ -327,13 +254,13 @@ token 读取优先级：环境变量 `IM_TEAMS_GATEWAY_TOKEN_<ENV>` > Keyring > 
 
 > **失效检测以服务端为准**：①本地只看 token 在不在——`load_token` 读 Keyring，有 token 就用（**不判本地过期**），无 token 即退出码 4（不联网）；②服务端兜底——本地 token 看似有效但已被服务端作废时，业务接口返回认证类网关码（见 §二 `gateway_errors.is_auth_code`，如 10230/12001 等），`request_json` 据此抛 `AuthExpiredError` → 退出码 4。两者都走同一条「`--start --no-cache`（删本地 token）重认证」补救。token 能用多久用多久，由服务端决定，不在本地人为设过期。
 
-> **业务脚本不内嵌交互式认证**：交互认证需要监听本机端口并等待用户操作，嵌在业务调用里会长时间阻塞（沙箱里还会因端口绑定失败报错）。未认证时脚本立即退出码 4，由代理按 SKILL.md「失败与认证分支协议」显式拉起 `im-teams-auth`（全任务最多一次），成功后重试原命令一次。
+> **业务脚本不内嵌交互式认证**：交互认证需要监听本机端口并等待用户操作，嵌在业务调用里会长时间阻塞（沙箱里还会因端口绑定失败报错）。未认证时脚本立即退出码 4，由代理按 SKILL.md「失败与认证分支协议」显式拉起认证子模块（`scripts/auth/auth.py`，全任务最多一次），成功后重试原命令一次。
 
-### 7.2 认证流程（详见 im-teams-auth 文档）
+### 7.2 认证流程（详见认证子模块文档）
 
 完整认证时序图、receiver 契约、会话复用和安全设计，统一维护在认证子模块文档 [docs/auth/ARCHITECTURE.md](./auth/ARCHITECTURE.md)（§四 认证流程），此处不重复。
 
-t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyring 读 token 注入请求头；长期 token 不经页面→receiver 传输，只在脚本侧 HTTPS 兑换。
+t5t 业务侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyring 读 token 注入请求头；长期 token 不经页面→receiver 传输，只在脚本侧 HTTPS 兑换。
 
 ### 7.3 认证链接（发给用户的形式）
 
@@ -393,10 +320,10 @@ t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyr
 
 **字段/认证**
 - payload 只能由脚本生成，禁止代理自行拼接。
-- `Appkey` 固定 `t5t`；`Authorization` 用 `im-teams-auth` 原始 token，不加 `Bearer`。
+- `Appkey` 固定 `t5t`；`Authorization` 用认证子模块缓存的原始 token，不加 `Bearer`。
 - 禁止展示 `Authorization` 或完整 token。
 - 禁止调用旧的 `teams-auth`。
-- 认证文案不是 `t5t-skill` 职责，只转述 `im-teams-auth` 结果。
+- 认证文案不是 t5t 业务侧职责，只转述认证子模块结果。
 
 ---
 

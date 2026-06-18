@@ -61,7 +61,7 @@ class NetworkError(T5TError):
 
 
 def _load_gateway_errors():
-    """加载 im-teams-auth 的统一网关错误码分类（纯数据模块，无内部依赖）。"""
+    """加载认证子模块（scripts/auth/）的统一网关错误码分类（纯数据模块，无内部依赖）。"""
     spec = importlib.util.spec_from_file_location(
         "im_teams_auth_gateway_errors",
         IM_TEAMS_AUTH_SCRIPTS_DIR / "gateway_errors.py",
@@ -120,7 +120,7 @@ def _load_credential_store():
         )
         if spec is None or spec.loader is None:
             raise AuthExpiredError(
-                f"无法加载 im-teams-auth 凭证存储模块: {IM_TEAMS_AUTH_CREDENTIAL_STORE}"
+                f"无法加载认证子模块凭证存储: {IM_TEAMS_AUTH_CREDENTIAL_STORE}"
             )
         credential_store = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(credential_store)
@@ -140,7 +140,7 @@ def _read_cached_token(environment: str) -> str | None:
     env_token = os.environ.get(credential_store.env_token_name_for(environment))
     if env_token:
         return env_token
-    token, _expiry = credential_store.keyring_load_token(environment)
+    token = credential_store.keyring_load_token(environment)
     return token or None
 
 
@@ -148,7 +148,7 @@ def load_token(environment: str) -> str:
     # keyring/环境变量有有效 token 时直接复用。
     # 未认证时立即退出码 4，不在业务脚本内部拉起交互式认证：
     # 交互认证需要本机监听端口并等待用户操作，嵌在业务调用里会长时间阻塞，
-    # 认证统一由代理按 SKILL.md 分支协议显式调用 im-teams-auth。
+    # 认证统一由代理按 SKILL.md 分支协议显式调用认证子模块（scripts/auth/）。
     token = _read_cached_token(environment)
     if token:
         return token
