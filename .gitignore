@@ -1,2 +1,5 @@
 /.system/
 /teams-t5t-2.0.0/
+/org-chart-skill/
+# 凭证本地文件兜底（沙箱里系统钥匙串不可用时存的 token），绝不提交
+gateway_token_*.json

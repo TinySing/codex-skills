@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 
 import t5t_client as t5t
 
@@ -64,7 +63,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         t5t.print_latest_detail(args.env, detail)
         return 0
-    except (t5t.T5TError, json.JSONDecodeError) as error:
+    except Exception as error:
+        # 收口一切：T5TError/JSON 错走专属分支，畸形接口数据等意外（如 AttributeError）
+        # 落 print_error 通用 error 分支，保证 stdout 必有结果 JSON，不漏 traceback。
         return t5t.print_error(error, args.env)
 
 

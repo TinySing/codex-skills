@@ -21,25 +21,27 @@
 
 ## 二、组件职责
 
+> 认证子模块位于 `scripts/auth/`，下表路径相对 skill 根目录。
+
 | 文件 | 职责 |
 |------|------|
-| `scripts/auth.py` | 认证状态检查、认证拉起、本地 receiver、短期凭证兑换、会话编排和结果输出 |
-| `scripts/credential_store.py` | token 命名、Keyring 读写、过期判断和清理 |
-| `scripts/session_store.py` | 待完成认证会话的文件锁、读写、复用判定与时效计算 |
-| `scripts/runtime.py` | 日志初始化和 `keyring` 依赖检测、安装 |
-| `scripts/env_check.py` | Python、平台和 `keyring` 环境检测 |
-| `scripts/config.py` | URL、scheme、端口、超时、Keyring 名称等静态配置 |
+| `scripts/auth/auth.py` | 认证状态检查、认证拉起、本地 receiver、短期凭证兑换、会话编排和结果输出 |
+| `scripts/auth/credential_store.py` | token 命名、Keyring/本地文件读写与清理（不记本地过期，失效以服务端为准） |
+| `scripts/auth/session_store.py` | 待完成认证会话的文件锁、读写、复用判定与时效计算 |
+| `scripts/auth/runtime.py` | 日志初始化和 `keyring` 依赖检测、安装 |
+| `scripts/auth/env_check.py` | Python、平台和 `keyring` 环境检测 |
+| `scripts/auth/config.py` | URL、scheme、端口、超时、Keyring 名称等静态配置 |
 
 ## 三、能力入口
 
 | 动作 | 入口 | 结果 |
 |------|------|------|
-| 环境检测 | `python3 scripts/env_check.py` | 输出 Python、平台和 `keyring` 检测结果 |
-| 检查认证 | `python3 scripts/auth.py --check` | 有有效凭证返回成功，否则返回未认证 |
-| 登录认证 | `python3 scripts/auth.py` | 复用缓存或拉起认证 |
-| 强制认证 | `python3 scripts/auth.py --no-cache` | 清除当前 Keyring 缓存并重新认证 |
-| 清除当前凭证 | `python3 scripts/auth.py --clear` | 清除当前 Keyring token 和过期时间 |
-| 清除全部凭证 | `python3 scripts/auth.py --clear-all` | 清除全部已配置环境的 Keyring 凭证 |
+| 环境检测 | `python3 scripts/auth/env_check.py` | 输出 Python、平台和 `keyring` 检测结果 |
+| 检查认证 | `python3 scripts/auth/auth.py --check` | 有有效凭证返回成功，否则返回未认证 |
+| 登录认证 | `python3 scripts/auth/auth.py` | 复用缓存或拉起认证 |
+| 强制认证 | `python3 scripts/auth/auth.py --no-cache` | 清除当前缓存（Keyring + 本地文件）并重新认证 |
+| 清除当前凭证 | `python3 scripts/auth/auth.py --clear` | 清除当前环境 token（Keyring + 本地文件兜底） |
+| 清除全部凭证 | `python3 scripts/auth/auth.py --clear-all` | 清除全部已配置环境的 token（Keyring + 本地文件兜底） |
 
 `--landing-url`、`--open-url-directly`、`--port`、`--timeout` 和 `--verbose` 属于开发调试能力，不应作为业务 skill 的常规调用方式。
 
@@ -71,7 +73,7 @@ sequenceDiagram
     Receiver->>Receiver: 校验路径、Origin、state、会话时效、请求格式
     Receiver->>Exchange: HTTPS 兑换短期凭证
     Exchange-->>Receiver: 公网 IM token
-    Receiver->>Keyring: 保存 token（不记本地过期）
+    Receiver->>Keyring: 保存 token（不记本地过期；钥匙串不可用则回退本地文件）
     Auth-->>Caller: status=ok
   end
 ```
@@ -115,10 +117,11 @@ sequenceDiagram
 
 1. 对应环境的 token 环境变量。
 2. 对应环境的 OS Keyring 凭证。
+3. 本地文件兜底：钥匙串不可用或写失败时落 `cache/gateway_token_<env>.json`（`chmod 600` 仅属主可读，见 §八）。
 
-Keyring 只存 token，不记本地过期时间。Keyring 里有 token 即视为可用、直接复用；token 是否真失效以服务端为准——业务接口返回 `gateway_errors.is_auth_code` 那一组认证码（含 401/403 及登录过期、账号停用等业务码）时，删 token 重认证。读取失败或无 token 时凭证视为不可用。
+只存 token，不记本地过期时间。有 token 即视为可用、直接复用；token 是否真失效以服务端为准——业务接口返回 `gateway_errors.is_auth_code` 那一组认证码（含 401/403 及登录过期、账号停用等业务码）时，删 token 重认证。读取失败或无 token 时凭证视为不可用。
 
-清理操作只处理 Keyring。若调用进程设置了环境变量 token，脚本会返回警告，但不会修改外部环境变量。
+清理操作同时处理 Keyring 和本地文件兜底（两处都删，不留残）。若调用进程设置了环境变量 token，脚本会返回警告，但不会修改外部环境变量。
 
 ## 七、调用方契约
 
@@ -157,7 +160,7 @@ Keyring 只存 token，不记本地过期时间。Keyring 里有 token 即视为
 - 使用严格 `Origin` 校验限制允许的认证页来源。
 - 只接受 JSON，并限制请求体大小。
 - 短期认证凭证通过 HTTPS 兑换。
-- 长期 token 仅保存在环境变量或 OS Keyring，不写明文文件。
+- 长期 token 首选环境变量 / OS Keyring；钥匙串不可用时回退本地文件 `cache/gateway_token_<env>.json`（`chmod 600` 仅属主可读，沙箱里 Keychain 锁住时仍能持久缓存、免每会话重认证）。
 - 日志不记录 token。
 - receiver 超时自动退出。
 

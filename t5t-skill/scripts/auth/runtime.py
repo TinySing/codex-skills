@@ -8,6 +8,7 @@ IM Teams 认证运行环境准备。
 import logging
 import subprocess
 import sys
+from functools import lru_cache
 from logging.handlers import RotatingFileHandler
 
 from config import LOG_BACKUP_COUNT, LOG_FILE, LOG_MAX_BYTES
@@ -48,7 +49,8 @@ def setup_logging(verbose: bool = False) -> None:
     root.addHandler(handler)
 
 
-def _keyring_available() -> bool:
+def _keyring_importable() -> bool:
+    """keyring 模块能不能 import（不管后端能不能用）。"""
     try:
         import keyring  # noqa: F401
         return True
@@ -56,9 +58,37 @@ def _keyring_available() -> bool:
         return False
 
 
+@lru_cache(maxsize=1)
+def _keyring_available() -> bool:
+    """keyring 已装且有可用后端。
+
+    沙箱里常是「装了但后端是 fail.Keyring」——能 import 却任何读写都抛异常，
+    等同不可用，此时应走本地文件兜底。
+
+    每个进程只探测一次（结果缓存）：探到不可用就一路走本地文件兜底，
+    避免 save/load/clear 反复触发 get_keyring()（某些后端走 DBus 探测偏慢）。
+    """
+    try:
+        import keyring
+        from keyring.backends import fail
+    except ImportError:
+        return False
+    try:
+        return not isinstance(keyring.get_keyring(), fail.Keyring)
+    except Exception:
+        return False
+
+
 def ensure_keyring() -> dict:
     if _keyring_available():
         return {"available": True}
+
+    # 能 import 但后端不可用（沙箱常见）：pip 装不出后端，别浪费时间，直接走文件兜底。
+    if _keyring_importable():
+        return {
+            "available": False,
+            "message": "keyring 已安装但无可用系统后端（沙箱常见），凭证回退本地文件存储。",
+        }
 
     try:
         result = subprocess.run(
@@ -68,8 +98,10 @@ def ensure_keyring() -> dict:
             text=True,
             timeout=60,
         )
-        if result.returncode == 0 and _keyring_available():
-            return {"available": True, "auto_installed": True}
+        if result.returncode == 0:
+            _keyring_available.cache_clear()  # 装完得重新探，否则读到装前缓存的 False
+            if _keyring_available():
+                return {"available": True, "auto_installed": True}
     except (OSError, subprocess.TimeoutExpired):
         pass
 

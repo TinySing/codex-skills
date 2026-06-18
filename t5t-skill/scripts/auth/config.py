@@ -23,7 +23,7 @@ ENV_TOKEN_NAME = "IM_TEAMS_GATEWAY_TOKEN"
 ENV_LANDING_URL = "IM_TEAMS_AUTH_LANDING_URL"
 
 # 默认运行环境。调试时只需在 production 和 test 之间修改此字段。
-ACTIVE_ENVIRONMENT = "test"
+ACTIVE_ENVIRONMENT = "production"
 
 RECEIVER_HOST = "127.0.0.1"
 RECEIVER_PORTS = list(range(35101, 35111))

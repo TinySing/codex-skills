@@ -575,12 +575,8 @@ def main(argv: list[str] | None = None) -> int:
 
     keyring_status = ensure_keyring()
     if not keyring_status["available"]:
-        _json_print({
-            "status": "error",
-            "message": keyring_status["message"],
-            "environment": args.env,
-        })
-        return 1
+        # 系统钥匙串不可用（沙箱里常见）：不阻断，凭证回退到本地文件存储（credential_store 自动处理）。
+        logger.warning("OS Keyring 不可用，凭证将回退本地文件存储: %s", keyring_status.get("message"))
 
     if args.check:
         token, expiry, source = _load_cached_token(args.env)

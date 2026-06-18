@@ -47,7 +47,7 @@
 | `scripts/t5t_client.py` | 共享：认证、请求、解析、payload 组装、确认哈希（不可直接执行） |
 | `scripts/config.py` | 静态配置：环境、域名、API 路径、Appkey、超时、依赖路径 |
 
-> **运行前置（见 SKILL.md「运行前置」）**：每个任务先跑 `../im-teams-auth/scripts/env_check.py` 取 `python_path`，后续所有命令用该绝对路径（避开会截断中文参数的 VM shim、兼容沙箱 PATH 缺失）。本文示例里的 `python3` 仅作占位，实际用 `python_path`。
+> **运行前置（见 SKILL.md「运行前置」）**：每个任务先跑 `scripts/auth/env_check.py` 取 `python_path`，后续所有命令用该绝对路径（避开会截断中文参数的 VM shim、兼容沙箱 PATH 缺失）。本文示例里的 `python3` 仅作占位，实际用 `python_path`。
 
 ---
 
@@ -55,7 +55,7 @@
 
 | 项 | 值 |
 |----|----|
-| 默认环境 | `test`（`ACTIVE_ENVIRONMENT`，可被环境变量 `T5T_ENV` 临时覆盖） |
+| 默认环境 | `production`（`ACTIVE_ENVIRONMENT`，可被环境变量 `T5T_ENV` 临时覆盖） |
 | production 域名 | `https://im.360teams.com` |
 | test 域名 | `https://sit-im.360teams.com` |
 | API 前缀 | `/api/qfin-api` |
@@ -76,7 +76,7 @@
 | 提交（新建+编辑共用） | POST | `/dgt/tft/weekly/report/commit` |
 | 预览页 | — | `/applink/page/t5t?...`（applink scheme） |
 
-统一网关错误码分类由 `../im-teams-auth/scripts/gateway_errors.py` 提供（跨 skill 共享）：`is_auth_code`（401/403/100401/100403/10130/10220/10230/10241/10301/12001/12003/12004→认证失效，删 token 重认证）、`is_network_code`（408/502/504/9999→提示网络）；其余非 0 码按普通错误粗处理。
+统一网关错误码分类由 `scripts/auth/gateway_errors.py` 提供（认证子模块，跨脚本共享）：`is_auth_code`（401/403/100401/100403/10130/10220/10230/10241/10301/12001/12003/12004→认证失效，删 token 重认证）、`is_network_code`（408/502/504/9999→提示网络）；其余非 0 码按普通错误粗处理。
 
 ### 脚本关键参数速查
 
@@ -323,15 +323,15 @@ t5t_client.create_request_context
   → build_headers(token)                     # 注入 Authorization（裸 token，不加 Bearer）
 ```
 
-token 读取优先级：环境变量 `IM_TEAMS_GATEWAY_TOKEN_<ENV>` > Keyring。环境变量 token 无本地过期时间。
+token 读取优先级：环境变量 `IM_TEAMS_GATEWAY_TOKEN_<ENV>` > Keyring > 本地文件兜底（见 §7.4）。环境变量 token 无本地过期时间。
 
-> **失效检测以服务端为准**：①本地只看 token 在不在——`load_token` 读 Keyring，有 token 就用（**不再判本地过期**），无 token 即退出码 4（不联网）；②服务端兜底——本地 token 看似有效但已被服务端作废时，业务接口返回认证类网关码（见 §二 `gateway_errors.is_auth_code`，如 10230/12001 等），`request_json` 据此抛 `AuthExpiredError` → 退出码 4。两者都走同一条「`--start --no-cache`（删本地 token）重认证」补救。token 能用多久用多久，由服务端决定，不在本地人为设过期。
+> **失效检测以服务端为准**：①本地只看 token 在不在——`load_token` 读 Keyring，有 token 就用（**不判本地过期**），无 token 即退出码 4（不联网）；②服务端兜底——本地 token 看似有效但已被服务端作废时，业务接口返回认证类网关码（见 §二 `gateway_errors.is_auth_code`，如 10230/12001 等），`request_json` 据此抛 `AuthExpiredError` → 退出码 4。两者都走同一条「`--start --no-cache`（删本地 token）重认证」补救。token 能用多久用多久，由服务端决定，不在本地人为设过期。
 
-> **业务脚本不再内嵌交互式认证**：交互认证需要监听本机端口并等待用户操作，嵌在业务调用里会长时间阻塞（沙箱里还会因端口绑定失败报错）。未认证时脚本立即退出码 4，由代理按 SKILL.md「失败与认证分支协议」显式拉起 `im-teams-auth`（全任务最多一次），成功后重试原命令一次。
+> **业务脚本不内嵌交互式认证**：交互认证需要监听本机端口并等待用户操作，嵌在业务调用里会长时间阻塞（沙箱里还会因端口绑定失败报错）。未认证时脚本立即退出码 4，由代理按 SKILL.md「失败与认证分支协议」显式拉起 `im-teams-auth`（全任务最多一次），成功后重试原命令一次。
 
 ### 7.2 认证流程（详见 im-teams-auth 文档）
 
-完整认证时序图、receiver 契约、会话复用和安全设计，统一维护在 `im-teams-auth` 的 [docs/ARCHITECTURE.md](../../im-teams-auth/docs/ARCHITECTURE.md)（§四 认证流程），此处不重复。
+完整认证时序图、receiver 契约、会话复用和安全设计，统一维护在认证子模块文档 [docs/auth/ARCHITECTURE.md](./auth/ARCHITECTURE.md)（§四 认证流程），此处不重复。
 
 t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyring 读 token 注入请求头；长期 token 不经页面→receiver 传输，只在脚本侧 HTTPS 兑换。
 
@@ -349,16 +349,16 @@ t5t 侧只需知道：经上面 7.1 的调用链拉起认证，成功后从 Keyr
 - 默认视为**并行兜底提示**：若业务命令仍在执行，不得宣告「流程已暂停」。
 - 只有脚本已结束且明确返回需中断的结果（退出码 4 + 已输出面向用户链接）时，才暂停等待用户。
 
-### 7.4 Keyring 存储
+### 7.4 凭证存储（Keyring 优先，本地文件兜底）
 
 | 项 | 值 |
 |----|----|
-| service | `im-teams-auth:production` / `im-teams-auth:test` |
-| token key | `gateway_token` |
+| 首选 | OS Keyring（service `im-teams-auth:production` / `:test`，key `gateway_token`；macOS Keychain / Windows Credential Manager） |
+| 兜底 | **本地文件**：钥匙串不可用或写失败（沙箱里 Keychain 锁住等）时，token 写到技能 cache 目录 `cache/gateway_token_<env>.json`（`chmod 600`，仅属主可读） |
+| 读取优先级 | 环境变量 `IM_TEAMS_GATEWAY_TOKEN_<ENV>` > Keyring > 本地文件 |
 | 本地过期 | 不记（有 token 即用，失效以服务端为准——返回 `is_auth_code` 那组认证码即重认证） |
-| 平台 | macOS Keychain / Windows Credential Manager |
 
-> `auth.py` 启动即 `ensure_keyring()`：缺失时自动 `pip install keyring`，装不上直接返回错误，**不会先弹认证窗再在保存时失败**（避免白认证一次）。
+> **沙箱兜底**：系统钥匙串在沙箱里常常用不了（库能 import 但 Keychain 锁住）。`keyring_save_token` 会先试钥匙串，写不进就**自动回退本地文件**——授权后即使钥匙串锁住也能落盘成功；文件持久保存，沙箱里**不必每会话重认证**。`ensure_keyring()` 不可用时只告警、不阻断（凭证走文件兜底）。仅当钥匙串和文件都不可写，才真失败。
 
 ### 7.5 退出码
 

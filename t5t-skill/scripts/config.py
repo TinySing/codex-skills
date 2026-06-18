@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 # 默认运行环境。调试时只需在 production 和 test 之间修改此字段。
-ACTIVE_ENVIRONMENT = "test"
+ACTIVE_ENVIRONMENT = "production"
 
 ENV_DOMAINS = {
     "production": "https://im.360teams.com",

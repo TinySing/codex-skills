@@ -345,13 +345,12 @@ def find_python() -> str:
     """
     plat = _current_platform()
 
-    # Priority 1: cached path
+    # Priority 1: cached path —— 命中只做 isfile 轻校验，不起子进程。
+    # 文件还在就信它（写缓存时已验过版本，同一路径版本不会变）；
+    # python 被卸载/挪走 → isfile 为 False → 落到下面重新探测（自愈）。
     cached_path = _read_cache()
-    if cached_path:
-        validated = _try_candidate(cached_path)
-        if validated:
-            _write_cache(validated[1])  # refresh cache with real path
-            return validated[1]
+    if cached_path and not is_shim(cached_path) and os.path.isfile(cached_path):
+        return cached_path
 
     # Priority 2: current running environment (if not a shim)
     current_exe = sys.executable
@@ -401,20 +400,16 @@ def find_python_with_info() -> dict:
     """
     plat = _current_platform()
 
-    # Priority 1: cached path
+    # Priority 1: cached path —— 命中只做 isfile 轻校验，不起子进程（详见 find_python）。
     cached_path = _read_cache()
-    if cached_path:
-        validated = _try_candidate(cached_path)
-        if validated:
-            version_str, real_path = validated
-            _write_cache(real_path)
-            return {
-                "status": "ok",
-                "python_path": real_path,
-                "version": version_str,
-                "platform": plat,
-                "cached": True,
-            }
+    if cached_path and not is_shim(cached_path) and os.path.isfile(cached_path):
+        return {
+            "status": "ok",
+            "python_path": cached_path,
+            "version": None,  # 快路径不起子进程查版本；需精确版本时缓存会在过期/失效后重探
+            "platform": plat,
+            "cached": True,
+        }
 
     # Priority 2: current running environment
     current_exe = sys.executable
