@@ -1,5 +1,0 @@
-exchangelib
-keyring
-backports.zoneinfo; python_version < "3.9"
-pypdf
-lxml

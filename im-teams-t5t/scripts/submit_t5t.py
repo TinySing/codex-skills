@@ -179,9 +179,24 @@ def main(argv: list[str] | None = None) -> int:
                 print_already_submitted(args.env)
             return 0
 
+        # --check 只做可填性预检：把全部可填写周期都列出来，让代理告诉用户
+        # 现在能不能提交、能填哪些周期；此阶段不选定、不写入。
+        if args.check:
+            t5t.json_print(
+                {
+                    "status": "available",
+                    "environment": args.env,
+                    "periods": [
+                        {"reportId": p.get("reportId"), "name": p.get("name")}
+                        for p in periods
+                    ],
+                }
+            )
+            return 0
+
         # 多个可填周期且未指定：交还代理让用户选，附 reportId 供二次提交（--report-id）。
-        # 只有一个周期则静默选用，不打扰用户。--check 仅做可填性预检，沿用第一个即可。
-        if not args.check and not args.report_id and len(periods) > 1:
+        # 只有一个周期则静默选用，不打扰用户。
+        if not args.report_id and len(periods) > 1:
             t5t.json_print(
                 {
                     "status": "period_choice",
@@ -195,18 +210,6 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         selected_period = t5t.select_period(periods, args.report_id)
-        if args.check:
-            t5t.json_print(
-                {
-                    "status": "available",
-                    "environment": args.env,
-                    "period": {
-                        "reportId": selected_period.get("reportId"),
-                        "name": selected_period.get("name"),
-                    },
-                }
-            )
-            return 0
 
         if not prevalidated:
             values = t5t.read_items(args)

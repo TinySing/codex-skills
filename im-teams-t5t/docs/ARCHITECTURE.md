@@ -94,7 +94,8 @@
 | edit | `--commit-confirmed --latest` | 一步更新最新单条：自动定位 id→核对→提交 |
 | edit | `--commit-confirmed --id <id>` | 编辑指定 id |
 | edit | `--to-list-json '<JSON>'` | 删抄送人（只能删，人数严格少于当前） |
-| 两者 | `--check`/`--dry-run`/`--skip-confirmation` | 仅开发排查（见 §五/§六） |
+| submit | `--check` | 只查能否提交（路径 E，只读，不生成/不写入） |
+| 两者 | `--dry-run`/`--skip-confirmation` | 仅开发排查（见 §五/§六） |
 
 > 提交命令在联网前已就地校验 `--items-json` 格式，格式错不联网就秒级返回，无需另跑 `--validate-items`。
 
@@ -336,7 +337,8 @@ t5t 业务侧只需知道：经上面 7.1 的调用链拉起认证，成功后�
 | submit `--commit-confirmed` | `already_submitted` | 周期已填（未带 `--update-if-exists`） | 按 canOperate 走冲突处理（对比/更新） |
 | submit `--validate-items` | `valid` / `error` | 纯本地格式校验结果（不联网） | valid→继续提交；error→按 message 重新生成 |
 | submit `--dry-run` | `dry_run` (create) | 新建待确认（仅开发排查） | 展示内容/周期/抄送人/同组可见，问确认提交 |
-| submit `--check` | `available`/`already_submitted` | 仅查周期（可选，非常规流程） | — |
+| submit `--check` | `available` | 有可填写周期，`periods` 列出全部 | 告知可提交、列周期名（路径 E） |
+| submit `--check` | `already_submitted` | 无可填写周期（最新已填） | 告知暂不能新建、可改走更新（路径 E） |
 | query `--list-recent` | `recent_list` | 最近 N 条（只读） | 展示列表后结束 |
 | query `--latest` | `latest_detail` | 最新详情 | 按 canOperate 分支（false=最新周期未填，想写本周改走 submit） |
 | query `--latest` | `not_found` | 无已填写 T5T | 结束 |
