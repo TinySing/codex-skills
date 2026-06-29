@@ -29,6 +29,15 @@ SELF_WEEKLY_PATH = "/dgt/tft/im/self"
 # 查最新单条固定用 1/1；浏览最近列表时才放大 pageSize。
 SELF_WEEKLY_DEFAULT_PAGE_NUM = 1
 SELF_WEEKLY_DEFAULT_PAGE_SIZE = 1
+# 浏览最近列表（--list-recent）未指定条数时的默认值。
+RECENT_LIST_DEFAULT_PAGE_SIZE = 5
+# 查直接上级及其 T5T 列表。
+SUPERIOR_PATH = "/dgt/tft/weekly/report/queryMySuperior"
+EMPLOYEE_REPORT_PATH = "/dgt/tft/im/employee/report"
+# 查上级列表未指定条数时只取最新一条。
+SUPERIOR_DEFAULT_PAGE_SIZE = 1
+# 所有列表接口的 pageSize 上限，保证性能、避免一次拉太多。
+LIST_MAX_PAGE_SIZE = 20
 DETAIL_BY_ID_PATH = "/dgt/tft/weekly/report/queryById/{id}"
 LATEST_COPIES_PATH = "/dgt/tft/weekly/report/latest/copies"
 COMMIT_PATH = "/dgt/tft/weekly/report/commit"

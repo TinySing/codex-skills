@@ -16,7 +16,7 @@ import uuid
 
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 from urllib.request import Request, urlopen
 
 from config import (
@@ -28,15 +28,18 @@ from config import (
     COMMIT_PATH,
     DETAIL_BY_ID_PATH,
     DEFAULT_REQUEST_TIMEOUT,
+    EMPLOYEE_REPORT_PATH,
     ENV_DOMAINS,
     IM_TEAMS_AUTH_CREDENTIAL_STORE,
     IM_TEAMS_AUTH_SCRIPTS_DIR,
     LATEST_COPIES_PATH,
+    LIST_MAX_PAGE_SIZE,
     PERIOD_LIST_PATH,
     PREVIEW_PATH,
     SELF_WEEKLY_DEFAULT_PAGE_NUM,
     SELF_WEEKLY_DEFAULT_PAGE_SIZE,
     SELF_WEEKLY_PATH,
+    SUPERIOR_PATH,
 )
 
 _SSL_CONTEXT = ssl.create_default_context()
@@ -300,13 +303,20 @@ def query_detail(
     return response, detail
 
 
+def clamp_page_size(page_size: int) -> int:
+    """所有列表接口共用：pageSize 必须 >= 1，且不超过 LIST_MAX_PAGE_SIZE，保证性能。"""
+    if page_size < 1:
+        raise T5TError("pageSize 必须 >= 1")
+    return min(page_size, LIST_MAX_PAGE_SIZE)
+
+
 def build_self_weekly_path(
     page_num: int = SELF_WEEKLY_DEFAULT_PAGE_NUM,
     page_size: int = SELF_WEEKLY_DEFAULT_PAGE_SIZE,
 ) -> str:
-    if page_num < 1 or page_size < 1:
-        raise T5TError("pageNum 和 pageSize 必须 >= 1")
-    return f"{SELF_WEEKLY_PATH}?pageNum={page_num}&pageSize={page_size}"
+    if page_num < 1:
+        raise T5TError("pageNum 必须 >= 1")
+    return f"{SELF_WEEKLY_PATH}?pageNum={page_num}&pageSize={clamp_page_size(page_size)}"
 
 
 def query_self_weekly_list(
@@ -324,6 +334,52 @@ def query_self_weekly_list(
     items = response.get("data")
     if not isinstance(items, list):
         raise T5TError(f"最近 T5T 列表返回格式异常: {response}")
+    return response, items
+
+
+def resolve_superior_username(
+    base_url: str,
+    headers: dict[str, str],
+    timeout: int,
+) -> str | None:
+    """查直接上级，返回其 username（查不到上级时返回 None）。"""
+    response = ensure_success(
+        request_json(base_url, SUPERIOR_PATH, "GET", headers, timeout=timeout),
+        "查询直接上级",
+    )
+    superior = response.get("data")
+    if not isinstance(superior, dict):
+        return None
+    username = (
+        superior.get("userName")
+        or superior.get("username")
+        or superior.get("domainAccount")
+    )
+    username = str(username or "").strip()
+    return username or None
+
+
+def query_employee_weekly_list(
+    base_url: str,
+    headers: dict[str, str],
+    username: str,
+    page_num: int,
+    page_size: int,
+    timeout: int,
+) -> tuple[dict[str, Any], list[Any]]:
+    if page_num < 1:
+        raise T5TError("pageNum 必须 >= 1")
+    path = (
+        f"{EMPLOYEE_REPORT_PATH}?username={quote(username)}"
+        f"&pageNum={page_num}&pageSize={clamp_page_size(page_size)}"
+    )
+    response = ensure_success(
+        request_json(base_url, path, "GET", headers, timeout=timeout),
+        "查询他人 T5T 列表",
+    )
+    items = response.get("data")
+    if not isinstance(items, list):
+        raise T5TError(f"他人 T5T 列表返回格式异常: {response}")
     return response, items
 
 
